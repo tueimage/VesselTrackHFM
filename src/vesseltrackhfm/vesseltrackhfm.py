@@ -3,6 +3,8 @@ A vessel tracking method based on a data-driven PDE based approach.
 The PDE solver based on the Hamiltonian Fast Marching method used can
 be found at : https://github.com/Mirebeau/HamiltonFastMarching
 
+The HFM-based PDE solver computes a distance-map w.r.t tubular structures in the image
+
 The vessel tracking method is described in the following papers:
 1. 'A PDE Approach to Data-Driven Sub-Riemannian Geodesics in SE(2)' by Bekkers et al.
 (https://epubs.siam.org/doi/pdf/10.1137/15M1018460)
@@ -26,7 +28,19 @@ from scipy.ndimage import label, center_of_mass
 
 class VesselTrackHFM(object):
 
-    def __init__(self, hfm_solver=None, out_dir=None, get_distance_map=True, get_geodesic_flow=True, lmbda=100, p=1.5):
+    def __init__(self, hfm_solver=None, out_dir=None, get_distance_map=True, get_geodesic_flow=True, lmbda=100, p=1.5,
+                 verbose=True):
+        """
+        Class that defines HFM solver based vessel tracking algorithm
+
+        :param hfm_solver: (HFMIO object) HFM solver (eg: Isotropic3, Riemannian, Reeds-Shepp etc.)
+        :param out_dir:
+        :param get_distance_map: (bool) Flag, if set to True, the hfm solver computes the vessel distance map
+        :param get_geodesic_flow: (bool) Flag, if set to True, the hfm solver produces geodesic flow maps
+        :param lmbda: (int) Parameter for the speed function used by the solver to sharpen filtered image
+        :param p: (float) Parameter for the speed function used by the solver to sharpen filtered image
+        :param verbose: (bool) Flag, set true for prints
+        """
         self.hfm_solver = hfm_solver
         self.out_dir = out_dir
 
@@ -42,6 +56,7 @@ class VesselTrackHFM(object):
 
         self.lmbda = lmbda
         self.p = p
+        self.verbose = verbose
 
     @staticmethod
     def _preprocess_image(image=None):
@@ -81,6 +96,16 @@ class VesselTrackHFM(object):
 
     @staticmethod
     def _find_seed_points(vesselMask=None, binarize=False):
+        """
+        The HFM solver requires seed-points to track vessels. To automate this process, the _find_seed_points()
+        function uses the binary vessel mask to find the centers of all the connected components (i.e. vessels and
+        tubular structures detected by the vesselness filter). The co-ordinates of these centers are returned as
+        seed-points
+
+        :param vesselMask: (numpy ndarray)
+        :param binarize: (bool) If true, the mask pixels are rescaled to have values 0 or 1
+        :return: seed_points: (numpy ndarray) Array of seed-point co-ordinates
+        """
 
         # Make the image 1's and 0's
         if binarize is True:
@@ -94,14 +119,6 @@ class VesselTrackHFM(object):
                                      labels=labelled_array,
                                      index=np.arange(1, num_labels + 1))
 
-        # min_pos = minimum_position(input=vesselMask,
-        #                            labels=labelled_array,
-        #                            index=np.arange(1, num_labels + 1))
-        #
-        # max_pos = maximum_position(input=vesselMask,
-        #                            labels=labelled_array,
-        #                            index=np.arange(1, num_labels + 1))
-
         return np.array(seed_points)
 
     def _solve_pde(self, image=None, vesselMask=None):
@@ -113,6 +130,13 @@ class VesselTrackHFM(object):
         speedR3 = np.divide(image, np.amax(image)).astype(np.float32)
         speedR3 = 1 + self.lmbda*np.power(speedR3, self.p)
 
+        if self.verbose is True:
+            verbosity = 2
+            showProgress = 1
+        else:
+            verbosity = 0
+            showProgress = 0
+
         params = {'arrayOrdering': 'YXZ_RowMajor',
                   # relaxation parameter for the model
                   'eps': 0.1,
@@ -123,8 +147,8 @@ class VesselTrackHFM(object):
                   'seeds': seed_points,
                   'exportValues': self.get_distance_map,
                   'exportGeodesicFlow': self.get_geodesic_flow,
-                  'verbosity': 2.,
-                  'showProgress': 1.}
+                  'verbosity': verbosity,
+                  'showProgress': showProgress}
 
         # Configure the HFM solver
         self.hfm_solver.set_array("dims", params['dims'])
@@ -140,8 +164,14 @@ class VesselTrackHFM(object):
 
     def __call__(self, image=None):
         """
+        Call operator for the VesselTrackHFM class
+        Wrapper around pre-processing and the PDE solver
+
+        Given an image, produces a distance map and (optionally) a geodesic flow tensor
+        It also returns the post-processed vesselness image (used to compute the speed function for the HFM solver)
 
         :param image: (numpy ndarray) : Liver MR scan, expected to be 3-D
+        :return vesselness_image: (numpy ndarray)
         :return: distance_map: (numpy ndarray) Distance map w.r.t. vessels (in general tubular structures in image)
         :return: geodesic_flows: (numpy ndarray) Geodesic flow vectors [geodesic_flows.ndim =  image.ndim+1]
         """

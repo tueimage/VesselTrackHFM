@@ -26,11 +26,8 @@ vessel_tracker = VesselTrackHFM(hfm_solver=hfm_solver,
                                 lmbda=100,
                                 p=1.5)
 
-pre_proc_img, distance_map, geodesic_flow = vessel_tracker(image=subtraction_image)
-
-write_niftee_image(image_array=convert_to_grayscale(pre_proc_img, dtype=np.uint16),
-                   affine=affine,
-                   filename='post_proc_vessel_img.nii')
+# Compute distance map and geodesic flow
+_, distance_map, geodesic_flow = vessel_tracker(image=subtraction_image)
 
 # Save the distance map
 write_niftee_image(image_array=convert_to_grayscale(distance_map, dtype=np.uint16),
