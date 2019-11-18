@@ -24,11 +24,17 @@ from skimage.filters import frangi
 from skimage.filters import threshold_otsu
 from scipy.ndimage import generate_binary_structure, binary_erosion, binary_dilation
 from scipy.ndimage import label, center_of_mass
+import sys
+# FIXME: Conda install for the 'agd' package(https://github.com/Mirebeau/AdaptiveGridDiscretizations) is broken.
+# Appending path to cloned repo for run-time inclusion of the package
+sys.path.append('/home/ishaan/agd/AdaptiveGridDiscretizations')
+from agd import HFMUtils
+from agd.HFMUtils import GetGeodesics
 
 
 class VesselTrackHFM(object):
 
-    def __init__(self, hfm_solver=None, out_dir=None, get_distance_map=True, get_geodesic_flow=True, lmbda=100, p=1.5,
+    def __init__(self, hfm_solver=None, out_dir=None, get_distance_map=True, get_geodesics=True, lmbda=100, p=1.5,
                  verbose=True):
         """
         Class that defines HFM solver based vessel tracking algorithm
@@ -49,10 +55,7 @@ class VesselTrackHFM(object):
         else:
             self.get_distance_map = 0
 
-        if get_geodesic_flow is True:
-            self.get_geodesic_flow = 1
-        else:
-            self.get_geodesic_flow = 0
+        self.get_geodesics = get_geodesics
 
         self.lmbda = lmbda
         self.p = p
@@ -137,30 +140,22 @@ class VesselTrackHFM(object):
             verbosity = 0
             showProgress = 0
 
-        params = {'arrayOrdering': 'YXZ_RowMajor',
+        params = {'model': 'Isotropic3',
+                  'arrayOrdering': 'YXZ_RowMajor',
+                  'order': 2,
                   # relaxation parameter for the model
                   'eps': 0.1,
-                  'dims': image.shape,
+                  'dims': [image.shape[0], image.shape[1], image.shape[2]],
                   # size of a pixel (only for physical dimensions)
                   'gridScale': 1.,
                   'speed': speedR3,
                   'seeds': seed_points,
                   'exportValues': self.get_distance_map,
-                  'exportGeodesicFlow': self.get_geodesic_flow,
+                  'exportGeodesicFlow': 1,
                   'verbosity': verbosity,
                   'showProgress': showProgress}
 
-        # Configure the HFM solver
-        self.hfm_solver.set_array("dims", params['dims'])
-        self.hfm_solver.set_array("speed", params['speed'])
-        self.hfm_solver.set_scalar("gridScale", params['gridScale'])
-        self.hfm_solver.set_array("seeds", params['seeds'])
-        self.hfm_solver.set_scalar("exportValues", params['exportValues'])
-        self.hfm_solver.set_scalar("verbosity", 2)
-        self.hfm_solver.set_scalar("showProgress", params['showProgress'])
-        self.hfm_solver.set_scalar("exportGeodesicFlow", params['exportGeodesicFlow'])
-
-        self.hfm_solver.run()
+        self.output = HFMUtils.Run(params)
 
     def __call__(self, image=None):
         """
@@ -182,16 +177,16 @@ class VesselTrackHFM(object):
         self._solve_pde(image=vesselness_image, vesselMask=vesselMask)
 
         if self.get_distance_map > 0:
-            distance_map = self.hfm_solver.get_array('values')
+            distance_map = self.output['values']
         else:
             distance_map = None
 
-        if self.get_geodesic_flow > 0:
-            geodesic_flow = self.hfm_solver.get_array('geodesicFlow')
+        if self.get_geodesics is True:
+            geodesics = self.output['geodesicFlow']
         else:
-            geodesic_flow = None
+            geodesics = None
 
-        return vesselness_image, distance_map, geodesic_flow
+        return vesselness_image, distance_map, geodesics
 
 
 
