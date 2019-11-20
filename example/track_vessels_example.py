@@ -6,6 +6,9 @@ import numpy as np
 from HFMpy import HFM_Isotropic3
 from vesseltrackhfm.vesseltrackhfm import VesselTrackHFM
 
+LAMBDA = 500
+p = 1.5
+
 IMAGE_PATH = '/home/ishaan/umc_data/lesion_dataset_clean/train/extracted_roi/47/centered_dce_liver_47_0.nii'
 
 # Use the Isotropic3 solver since we consider the image in the R3 space
@@ -25,42 +28,20 @@ write_niftee_image(image_array=convert_to_grayscale(subtraction_image, dtype=np.
 
 # Track vessels
 vessel_tracker = VesselTrackHFM(hfm_solver=hfm_solver,
-                                lmbda=100,
-                                p=1.5)
+                                lmbda=LAMBDA,
+                                p=p)
 
 # Compute distance map and geodesic flow
-vesselness, distance_map, geodesics = vessel_tracker(image=subtraction_image)
-
-h, w, slices = distance_map.shape
-# Get the flow-maps for X, Y and Z directions
-flowX, flowY, flowZ = geodesics[:, :, :, 0], geodesics[:, :, :, 1], geodesics[:, :, :, 2]
-
-x, y, z = np.meshgrid(np.arange(start=0, stop=h, step=10),
-                      np.arange(start=0, stop=w, step=10),
-                      np.arange(start=0, stop=slices, step=10))
-
-fig = plt.figure()
-ax = fig.gca(projection='3d')
-ax.set_xlabel('Left to Right')
-ax.set_zlabel('Head to Feet')
-ax.set_ylabel('Scanner Z-axis')
-ax.set_title('Geodesic Flow diagram')
-ax.quiver(x, z, y, flowX[::10, ::10, ::10], flowZ[::10, ::10, ::10], flowY[::10, ::10, ::10],
-          normalize=False,
-          length=0.3,
-          color=['r'])
+vesselness, distance_map, _ = vessel_tracker(image=subtraction_image)
 
 # Save the distance map
 write_niftee_image(image_array=convert_to_grayscale(distance_map, dtype=np.uint16),
                    affine=affine,
-                   filename='vessel_distance_map.nii')
+                   filename='vessel_distance_map_lm_{}_p_{}.nii'.format(LAMBDA, p))
 
 write_niftee_image(image_array=convert_to_grayscale(vesselness, dtype=np.uint16),
                    affine=affine,
                    filename='frangi_filtered.nii')
-
-plt.savefig('geodesic_flow.png')
-plt.show()
 
 
 

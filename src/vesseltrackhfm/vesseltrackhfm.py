@@ -23,13 +23,13 @@ from skimage.filters import gaussian
 from skimage.filters import frangi
 from skimage.filters import threshold_otsu
 from scipy.ndimage import generate_binary_structure, binary_erosion, binary_dilation
+from scipy.ndimage.measurements import sum
 from scipy.ndimage import label, center_of_mass
 import sys
 # FIXME: Conda install for the 'agd' package(https://github.com/Mirebeau/AdaptiveGridDiscretizations) is broken.
 # Appending path to cloned repo for run-time inclusion of the package
 sys.path.append('/home/ishaan/agd/AdaptiveGridDiscretizations')
 from agd import HFMUtils
-from agd.HFMUtils import GetGeodesics
 
 
 class VesselTrackHFM(object):
@@ -83,27 +83,28 @@ class VesselTrackHFM(object):
         # Use the threshold to create a binary mask
         vesselMask = np.where(vessel_filtered_image >= thresh, 1, 0).astype(np.uint8)
 
-        # Morphological operations on the binarized vessel mask
-        se_erosion = generate_binary_structure(rank=vesselMask.ndim, connectivity=2)
-        se_dilation = generate_binary_structure(rank=vesselMask.ndim, connectivity=8)
+        # Disabling post-processing of the Frangi filtered image (on Erik's suggestion)
+        # # Morphological operations on the binarized vessel mask
+        # se_erosion = generate_binary_structure(rank=vesselMask.ndim, connectivity=2)
+        # se_dilation = generate_binary_structure(rank=vesselMask.ndim, connectivity=8)
+        #
+        # #  Perform erosion-dilation instead of opening to have better fine grain control
+        # #  (iterations, different structure elements etc.)
+        # vesselMask_erosion = binary_erosion(input=vesselMask, structure=se_erosion, iterations=2).astype(vesselMask.dtype)
+        # vesselMask_opened = binary_dilation(input=vesselMask_erosion, structure=se_dilation, iterations=3).astype(vesselMask.dtype)
+        #
+        # # Apply post-processed mask to the vesselness image to get rid of the noise
+        # post_proc_img = np.multiply(vessel_filtered_image, vesselMask_opened)
 
-        #  Perform erosion-dilation instead of opening to have better fine grain control
-        #  (iterations, different structure elements etc.)
-        vesselMask_erosion = binary_erosion(input=vesselMask, structure=se_erosion, iterations=2).astype(vesselMask.dtype)
-        vesselMask_opened = binary_dilation(input=vesselMask_erosion, structure=se_dilation, iterations=3).astype(vesselMask.dtype)
-
-        # Apply post-processed mask to the vesselness image to get rid of the noise
-        post_proc_img = np.multiply(vessel_filtered_image, vesselMask_opened)
-
+        post_proc_img = vessel_filtered_image
         return post_proc_img, vesselMask
 
     @staticmethod
-    def _find_seed_points(vesselMask=None, binarize=False):
+    def _find_seed_point(vesselMask=None, binarize=False):
         """
-        The HFM solver requires seed-points to track vessels. To automate this process, the _find_seed_points()
-        function uses the binary vessel mask to find the centers of all the connected components (i.e. vessels and
-        tubular structures detected by the vesselness filter). The co-ordinates of these centers are returned as
-        seed-points
+        The HFM solver requires seed-points to track vessels, this function automates that process.
+        Z-axis (dim=2) in the DCE image is the floor-ceiling axis (w.r.t scanner). Therefore we select a seed-point
+        from the top-most (max(z dim)) slice which has a non-zero value in its vessel mask.
 
         :param vesselMask: (numpy ndarray)
         :param binarize: (bool) If true, the mask pixels are rescaled to have values 0 or 1
@@ -114,20 +115,44 @@ class VesselTrackHFM(object):
         if binarize is True:
             vesselMask = np.divide(vesselMask, np.amax(vesselMask)).astype(np.uint8)
 
-        se_cc = generate_binary_structure(rank=vesselMask.ndim, connectivity=8)
+        _, _, slices = vesselMask.shape
 
-        labelled_array, num_labels = label(vesselMask, se_cc)
+        seed_slice_idx = np.nan
+        for slice_idx in np.arange(slices-1, -1, -1):
+            # Check if mask contains non-zero locations
+            nz_indices = np.nonzero(vesselMask[:, :, slice_idx])
+            if nz_indices[0].size != 0 and nz_indices[1].size != 0:
+                seed_slice_idx = slice_idx
+                break
 
-        seed_points = center_of_mass(input=vesselMask,
-                                     labels=labelled_array,
-                                     index=np.arange(1, num_labels + 1))
+        if np.isnan(seed_slice_idx):
+            raise RuntimeError('Unable to find slice with non-zero mask value.')
 
-        return np.array(seed_points)
+        seed_slice = vesselMask[:, :, seed_slice_idx]
+
+        se_cc = generate_binary_structure(rank=seed_slice.ndim, connectivity=8)
+
+        labelled_array, num_labels = label(seed_slice, se_cc)
+
+        # Find largest component among different labels
+        comp_sizes = sum(input=seed_slice, labels=labelled_array, index=np.arange(1, num_labels+1))
+        largest_component_label = list(comp_sizes).index(max(comp_sizes))
+
+        # This seed-point returns a 2D array with the X and Y co-ordinate of the center-of-mass
+        # of the largest component in the seed_slice
+        slice_seed_point = center_of_mass(input=seed_slice,
+                                          labels=labelled_array,
+                                          index=largest_component_label)
+
+        # Create the 3D seed-point by appending the slice idx
+        seed_point = [slice_seed_point[0], slice_seed_point[1], seed_slice_idx]
+
+        return np.array(seed_point)
 
     def _solve_pde(self, image=None, vesselMask=None):
 
-        seed_points = self._find_seed_points(vesselMask=vesselMask,
-                                             binarize=False)
+        seed_points = self._find_seed_point(vesselMask=vesselMask,
+                                            binarize=False)
 
         # Construct the speed function for the PDE
         speedR3 = np.divide(image, np.amax(image)).astype(np.float32)
@@ -143,13 +168,11 @@ class VesselTrackHFM(object):
         params = {'model': 'Isotropic3',
                   'arrayOrdering': 'YXZ_RowMajor',
                   'order': 2,
-                  # relaxation parameter for the model
-                  'eps': 0.1,
                   'dims': [image.shape[0], image.shape[1], image.shape[2]],
                   # size of a pixel (only for physical dimensions)
                   'gridScale': 1.,
                   'speed': speedR3,
-                  'seeds': seed_points,
+                  'seeds': np.array([seed_points]),
                   'exportValues': self.get_distance_map,
                   'exportGeodesicFlow': 1,
                   'verbosity': verbosity,
