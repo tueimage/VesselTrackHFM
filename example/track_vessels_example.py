@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 from utils.image_utils import write_niftee_image, read_niftee_image
 from utils.utils import convert_to_grayscale
 import numpy as np
-from HFMpy import HFM_Isotropic3
 from vesseltrackhfm.vesseltrackhfm import VesselTrackHFM
 
 LAMBDA = 500
@@ -11,8 +10,6 @@ p = 1.5
 
 IMAGE_PATH = '/home/ishaan/umc_data/lesion_dataset_clean/train/extracted_roi/47/centered_dce_liver_47_0.nii'
 
-# Use the Isotropic3 solver since we consider the image in the R3 space
-hfm_solver = HFM_Isotropic3.HFMIO()
 
 # Read the DCE MR series
 dce_mr_series, affine = read_niftee_image(filename=IMAGE_PATH)
@@ -27,12 +24,11 @@ write_niftee_image(image_array=convert_to_grayscale(subtraction_image, dtype=np.
                    filename='subtraction_image.nii')
 
 # Track vessels
-vessel_tracker = VesselTrackHFM(hfm_solver=hfm_solver,
-                                lmbda=LAMBDA,
+vessel_tracker = VesselTrackHFM(lmbda=LAMBDA,
                                 p=p)
 
 # Compute distance map and geodesic flow
-vesselness, distance_map, _ = vessel_tracker(image=subtraction_image)
+vesselness, distance_map = vessel_tracker(image=subtraction_image)
 
 # Save the distance map
 write_niftee_image(image_array=convert_to_grayscale(distance_map, dtype=np.uint16),

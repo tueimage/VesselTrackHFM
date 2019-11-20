@@ -34,7 +34,7 @@ from agd import HFMUtils
 
 class VesselTrackHFM(object):
 
-    def __init__(self, hfm_solver=None, out_dir=None, get_distance_map=True, get_geodesics=True, lmbda=100, p=1.5,
+    def __init__(self, get_distance_map=True, lmbda=100, p=1.5,
                  verbose=True):
         """
         Class that defines HFM solver based vessel tracking algorithm
@@ -47,15 +47,11 @@ class VesselTrackHFM(object):
         :param p: (float) Parameter for the speed function used by the solver to sharpen filtered image
         :param verbose: (bool) Flag, set true for prints
         """
-        self.hfm_solver = hfm_solver
-        self.out_dir = out_dir
 
         if get_distance_map is True:
             self.get_distance_map = 1
         else:
             self.get_distance_map = 0
-
-        self.get_geodesics = get_geodesics
 
         self.lmbda = lmbda
         self.p = p
@@ -204,12 +200,8 @@ class VesselTrackHFM(object):
         else:
             distance_map = None
 
-        if self.get_geodesics is True:
-            geodesics = self.output['geodesicFlow']
-        else:
-            geodesics = None
+        return vesselness_image, distance_map
 
-        return vesselness_image, distance_map, geodesics
 
 
 
