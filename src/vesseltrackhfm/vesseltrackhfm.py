@@ -25,10 +25,6 @@ from skimage.filters import threshold_otsu
 from scipy.ndimage import generate_binary_structure, binary_erosion, binary_dilation
 from scipy.ndimage.measurements import sum
 from scipy.ndimage import label, center_of_mass
-import sys
-# FIXME: Conda install for the 'agd' package(https://github.com/Mirebeau/AdaptiveGridDiscretizations) is broken.
-# Appending path to cloned repo for run-time inclusion of the package
-sys.path.append('/home/ishaan/agd/AdaptiveGridDiscretizations')
 from agd import HFMUtils
 
 
