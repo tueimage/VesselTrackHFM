@@ -114,27 +114,34 @@ class VesselTrackHFM(object):
             # Check if mask contains non-zero locations
             nz_indices = np.nonzero(vesselMask[:, :, slice_idx])
             if nz_indices[0].size != 0 and nz_indices[1].size != 0:
-                seed_slice_idx = slice_idx
-                break
+                mask_slice = vesselMask[:, :, slice_idx]
+                se_cc = generate_binary_structure(rank=mask_slice.ndim, connectivity=4)
+                labelled_array, num_labels = label(mask_slice, se_cc)
+                if num_labels > 1:
+                    seed_slice_idx = slice_idx
+                    seed_label_array = labelled_array
+                    seed_num_labels = num_labels
+                    break
+                else:
+                    continue
 
         if np.isnan(seed_slice_idx):
             raise RuntimeError('Unable to find slice with non-zero mask value.')
 
         seed_slice = vesselMask[:, :, seed_slice_idx]
 
-        se_cc = generate_binary_structure(rank=seed_slice.ndim, connectivity=8)
-
-        labelled_array, num_labels = label(seed_slice, se_cc)
-
         # Find largest component among different labels
-        comp_sizes = sum(input=seed_slice, labels=labelled_array, index=np.arange(1, num_labels+1))
+        comp_sizes = sum(input=seed_slice, labels=seed_label_array, index=np.arange(1, seed_num_labels+1))
         largest_component_label = list(comp_sizes).index(max(comp_sizes))
 
         # This seed-point returns a 2D array with the X and Y co-ordinate of the center-of-mass
         # of the largest component in the seed_slice
         slice_seed_point = center_of_mass(input=seed_slice,
-                                          labels=labelled_array,
+                                          labels=seed_label_array,
                                           index=largest_component_label)
+
+        if np.isnan(slice_seed_point[0]) is True or np.isnan(slice_seed_point[1]) is True:
+            raise RuntimeError('Seed-points not found in selected slice')
 
         # Create the 3D seed-point by appending the slice idx
         seed_point = [slice_seed_point[0], slice_seed_point[1], seed_slice_idx]

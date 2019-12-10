@@ -1,27 +1,29 @@
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
-import matplotlib.pyplot as plt
-from utils.image_utils import write_niftee_image, read_niftee_image
 from utils.utils import convert_to_grayscale
+import SimpleITK as sitk
 import numpy as np
+import os
 from vesseltrackhfm.vesseltrackhfm import VesselTrackHFM
 
 LAMBDA = 500
 p = 1.5
 
-IMAGE_PATH = '/home/ishaan/umc_data/lesion_dataset_clean/train/extracted_roi/47/centered_dce_liver_47_0.nii'
-
+IMAGE_DIR = '/home/ishaan/dataset_creation/example/images'
 
 # Read the DCE MR series
-dce_mr_series, affine = read_niftee_image(filename=IMAGE_PATH)
+dce_pre_contrast = sitk.ReadImage(os.path.join(IMAGE_DIR, 'dce_phase_0.nii'))
+dce_post_contrast = sitk.ReadImage(os.path.join(IMAGE_DIR, 'dce_phase_10.nii'))
+
+# Save the metadata
+spacing = dce_pre_contrast.GetSpacing()
+origin = dce_pre_contrast.GetOrigin()
+direction = dce_pre_contrast.GetDirection()
+
+dce_pre_contrast_arr = sitk.GetArrayFromImage(dce_pre_contrast).transpose((1, 2, 0))
+dce_post_contrast_arr = sitk.GetArrayFromImage(dce_post_contrast).transpose((1, 2, 0))
 
 # Create subtraction image between post- and pre-contrast phases that highlight the vessels
-subtraction_image = np.subtract(dce_mr_series[:, :, :, 4], dce_mr_series[:, :, :, 0])
+subtraction_image = np.subtract(dce_post_contrast_arr, dce_pre_contrast_arr)
 subtraction_image = np.where(subtraction_image < 0, 0, subtraction_image)
-
-# Save the subtraction image
-write_niftee_image(image_array=convert_to_grayscale(subtraction_image, dtype=np.uint16),
-                   affine=affine,
-                   filename='subtraction_image.nii')
 
 # Track vessels
 vessel_tracker = VesselTrackHFM(lmbda=LAMBDA,
@@ -30,15 +32,16 @@ vessel_tracker = VesselTrackHFM(lmbda=LAMBDA,
 # Compute distance map and geodesic flow
 vesselness, distance_map = vessel_tracker(image=subtraction_image)
 
-# Save the distance map
-write_niftee_image(image_array=convert_to_grayscale(distance_map, dtype=np.uint16),
-                   affine=affine,
-                   filename='vessel_distance_map_lm_{}_p_{}.nii'.format(LAMBDA, p))
+vesselness_img = sitk.GetImageFromArray(arr=vesselness.transpose((2, 0, 1)))
+vesselness_img.SetOrigin(origin)
+vesselness_img.SetSpacing(spacing)
+vesselness_img.SetDirection(direction)
 
-write_niftee_image(image_array=convert_to_grayscale(vesselness, dtype=np.uint16),
-                   affine=affine,
-                   filename='frangi_filtered.nii')
+distance_map_img = sitk.GetImageFromArray(arr=distance_map.transpose((2, 0, 1)))
+distance_map_img.SetOrigin(origin)
+distance_map_img.SetSpacing(spacing)
+distance_map_img.SetDirection(direction)
 
-
-
+sitk.WriteImage(vesselness_img, 'vesselness.nii')
+sitk.WriteImage(distance_map_img, 'distancemap.nii')
 
