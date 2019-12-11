@@ -90,8 +90,7 @@ class VesselTrackHFM(object):
         post_proc_img = vessel_filtered_image
         return post_proc_img, vesselMask
 
-    @staticmethod
-    def _find_seed_point(vesselMask=None, binarize=False):
+    def _find_seed_point(self, vesselMask=None, binarize=False):
         """
         The HFM solver requires seed-points to track vessels, this function automates that process.
         Z-axis (dim=2) in the DCE image is the floor-ceiling axis (w.r.t scanner). Therefore we select a seed-point
@@ -108,6 +107,8 @@ class VesselTrackHFM(object):
 
         _, _, slices = vesselMask.shape
 
+        # np.seterr(all='raise')
+
         seed_slice_idx = np.nan
         for slice_idx in np.arange(slices-1, -1, -1):
             # Check if mask contains non-zero locations
@@ -120,27 +121,30 @@ class VesselTrackHFM(object):
                     seed_slice_idx = slice_idx
                     seed_label_array = labelled_array
                     seed_num_labels = num_labels
-                    break
+                    seed_slice = vesselMask[:, :, seed_slice_idx]
+
+                    # Find largest component among different labels
+                    comp_sizes = sum(input=seed_slice, labels=seed_label_array, index=np.arange(1, seed_num_labels + 1))
+                    largest_component_label = list(comp_sizes).index(max(comp_sizes))
+
+                    # This seed-point returns a 2D array with the X and Y co-ordinate of the center-of-mass
+                    # of the largest component in the seed_slice
+                    slice_seed_point = center_of_mass(input=seed_slice,
+                                                      labels=seed_label_array,
+                                                      index=largest_component_label)
+
+                    if np.isnan(slice_seed_point[0]) or np.isnan(slice_seed_point[1]):
+                        continue
+                    else:
+                        if self.verbose is True:
+                            print('Seed-point selected : [{}, {}, {}]'.format(slice_seed_point[0], slice_seed_point[1],
+                                                                              seed_slice_idx))
+                        break
                 else:
                     continue
 
         if np.isnan(seed_slice_idx):
             raise RuntimeError('Unable to find slice with non-zero mask value.')
-
-        seed_slice = vesselMask[:, :, seed_slice_idx]
-
-        # Find largest component among different labels
-        comp_sizes = sum(input=seed_slice, labels=seed_label_array, index=np.arange(1, seed_num_labels+1))
-        largest_component_label = list(comp_sizes).index(max(comp_sizes))
-
-        # This seed-point returns a 2D array with the X and Y co-ordinate of the center-of-mass
-        # of the largest component in the seed_slice
-        slice_seed_point = center_of_mass(input=seed_slice,
-                                          labels=seed_label_array,
-                                          index=largest_component_label)
-
-        if np.isnan(slice_seed_point[0]) or np.isnan(slice_seed_point[1]):
-            raise RuntimeError('Seed-points not found in selected slice')
 
         # Create the 3D seed-point by appending the slice idx
         seed_point = [slice_seed_point[0], slice_seed_point[1], seed_slice_idx]
