@@ -76,7 +76,6 @@ class VesselTrackHFM(object):
         vesselMask = np.where(vessel_filtered_image >= thresh, 1, 0).astype(np.uint8)
 
         # Disabling post-processing of the Frangi filtered image (on Erik's suggestion)
-        # # Morphological operations on the binarized vessel mask
         # se_erosion = generate_binary_structure(rank=vesselMask.ndim, connectivity=2)
         # se_dilation = generate_binary_structure(rank=vesselMask.ndim, connectivity=8)
         #
@@ -115,9 +114,8 @@ class VesselTrackHFM(object):
             nz_indices = np.nonzero(vesselMask[:, :, slice_idx])
             if nz_indices[0].size != 0 and nz_indices[1].size != 0:
                 mask_slice = vesselMask[:, :, slice_idx]
-                se_cc = generate_binary_structure(rank=mask_slice.ndim, connectivity=4)
+                se_cc = generate_binary_structure(rank=mask_slice.ndim, connectivity=8)
                 labelled_array, num_labels = label(mask_slice, se_cc)
-                # Check if we find > 1 objects
                 if num_labels > 1:
                     seed_slice_idx = slice_idx
                     seed_label_array = labelled_array
