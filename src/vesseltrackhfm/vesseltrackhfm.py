@@ -18,13 +18,15 @@ Email: ishaan@isi.uu.nl
 """
 
 import numpy as np
-from skimage import img_as_float32
+from skimage import img_as_float32, img_as_uint
 from skimage.filters import gaussian
 from skimage.filters import frangi
 from skimage.filters import threshold_otsu
+from skimage.exposure import equalize_hist
 from scipy.ndimage import generate_binary_structure, binary_erosion, binary_dilation
 from scipy.ndimage.measurements import sum
 from scipy.ndimage import label, center_of_mass
+from utils.utils import convert_to_grayscale
 from agd import HFMUtils
 
 
@@ -63,11 +65,20 @@ class VesselTrackHFM(object):
 
         # Smooth image to remove high freq noise
         # TODO: Better de-noising method specially tailored for DCE MR images
-        smoothed_image = gaussian(image=image,
-                                  sigma=1.5)
+        image = gaussian(image=image,
+                         sigma=1.5)
+
+        # Don't use parts outside the liver RoI to construct the histogram
+        mask = np.where(image == 0, 0, 1).astype(np.uint8)
+        # Histogram equalization for contrast enhancement between vessels and liver tissue
+        image = equalize_hist(image, mask=mask)
+
+        image = convert_to_grayscale(image, dtype=np.uint16)
+        image = np.multiply(image, mask)
+        image = img_as_float32(image)
 
         #  Enhance vessels by using Frangi filter
-        vessel_filtered_image = frangi(image=smoothed_image,
+        vessel_filtered_image = frangi(image=image,
                                        black_ridges=False)
 
         # Threshold the vesselness image using Otsu's method to calculate the threshold
