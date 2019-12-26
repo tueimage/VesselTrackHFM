@@ -56,7 +56,7 @@ class VesselTrackHFM(object):
         self.verbose = verbose
 
     @staticmethod
-    def _preprocess_image(image=None):
+    def enhance_vessels(image=None):
         assert (isinstance(image, np.ndarray))
         assert (image.ndim <= 3)
 
@@ -67,15 +67,6 @@ class VesselTrackHFM(object):
         # TODO: Better de-noising method specially tailored for DCE MR images
         image = gaussian(image=image,
                          sigma=1.5)
-
-        # Don't use parts outside the liver RoI to construct the histogram
-        mask = np.where(image == 0, 0, 1).astype(np.uint8)
-        # Histogram equalization for contrast enhancement between vessels and liver tissue
-        image = equalize_hist(image, mask=mask)
-
-        image = convert_to_grayscale(image, dtype=np.uint16)
-        image = np.multiply(image, mask)
-        image = img_as_float32(image)
 
         #  Enhance vessels by using Frangi filter
         vessel_filtered_image = frangi(image=image,
@@ -207,7 +198,7 @@ class VesselTrackHFM(object):
         :return: geodesic_flows: (numpy ndarray) Geodesic flow vectors [geodesic_flows.ndim =  image.ndim+1]
         """
         # Pre-processing of the image to highlight vessels/tubular structures
-        vesselness_image, vesselMask = self._preprocess_image(image=image)
+        vesselness_image, vesselMask = self.enhance_vessels(image=image)
 
         # Solve the eikonal PDE to find shortest geodesics using the HFM method
         self._solve_pde(image=vesselness_image, vesselMask=vesselMask)
