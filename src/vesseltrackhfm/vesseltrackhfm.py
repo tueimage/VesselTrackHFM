@@ -70,7 +70,9 @@ class VesselTrackHFM(object):
 
         #  Enhance vessels by using Frangi filter
         vessel_filtered_image = frangi(image=image,
-                                       black_ridges=False)
+                                       black_ridges=False,
+                                       scale_range=(1, 3),
+                                       scale_step=1)
 
         # Threshold the vesselness image using Otsu's method to calculate the threshold
         thresh = threshold_otsu(image=vessel_filtered_image)
