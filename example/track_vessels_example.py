@@ -4,15 +4,19 @@ import os
 from vesseltrackhfm.vesseltrackhfm import VesselTrackHFM
 from utils.image_utils import copy_image_metadata
 from skimage.filters import threshold_otsu
+from dataset_creation.extract_roi import LiverImageCreator
 
 LAMBDA = 500
 p = 1.5
 
-IMAGE_DIR = '/home/ishaan/dataset_creation/example/images'
+IMAGE_DIR = '/home/ishaan/Desktop/UMC_Data/LesionDetection/Detection/Data/1'
 
 # Read the DCE MR series
-dce_img = sitk.ReadImage(os.path.join(IMAGE_DIR, 'dce.nii'))
-lesion_mask = sitk.ReadImage(os.path.join(IMAGE_DIR, 'lesion_mask.nii'))
+liver_image_obj = LiverImageCreator(raw_data_dir=IMAGE_DIR,
+                                    out_size=256)
+
+dce_img, _, lesion_mask = liver_image_obj.apply_liver_mask()
+
 
 dce_img_np = sitk.GetArrayFromImage(dce_img).transpose((2, 3, 1, 0))
 dce_post_contrast_arr = dce_img_np[:, :, :, 10]
@@ -39,17 +43,22 @@ vessel_tracker = VesselTrackHFM(lmbda=LAMBDA,
                                 p=p)
 
 # Compute distance map and geodesic flow
-vesselness, distance_map = vessel_tracker(image=subtraction_image)
+vesselness, distance_map, vesselMask = vessel_tracker(image=subtraction_image)
 
+
+# Save the outputs
 vesselness_img = sitk.GetImageFromArray(arr=vesselness.transpose((2, 0, 1)))
 
 vesselness_img.CopyInformation(lesion_mask)
 
-# Save the outputs
 distance_map_img = sitk.GetImageFromArray(arr=distance_map.transpose((2, 0, 1)))
 
 distance_map_img.CopyInformation(lesion_mask)
 
+vesselMask_img = sitk.GetImageFromArray(arr=vesselMask.transpose((2, 0, 1)))
+vesselMask_img.CopyInformation(lesion_mask)
+
 sitk.WriteImage(vesselness_img, 'vesselness.nii')
 sitk.WriteImage(distance_map_img, 'distancemap.nii')
+sitk.WriteImage(vesselMask_img, 'vesselMask.nii')
 

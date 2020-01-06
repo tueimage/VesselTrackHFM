@@ -18,15 +18,13 @@ Email: ishaan@isi.uu.nl
 """
 
 import numpy as np
-from skimage import img_as_float32, img_as_uint
+from skimage import img_as_float32
 from skimage.filters import gaussian
 from skimage.filters import frangi
 from skimage.filters import threshold_otsu
-from skimage.exposure import equalize_hist
-from scipy.ndimage import generate_binary_structure, binary_erosion, binary_dilation
+from scipy.ndimage import generate_binary_structure
 from scipy.ndimage.measurements import sum
 from scipy.ndimage import label, center_of_mass
-from utils.utils import convert_to_grayscale
 from agd import HFMUtils
 
 
@@ -71,7 +69,7 @@ class VesselTrackHFM(object):
         #  Enhance vessels by using Frangi filter
         vessel_filtered_image = frangi(image=image,
                                        black_ridges=False,
-                                       sigmas=range(1, 3, 1))
+                                       sigmas=(1, 3, 1))
 
         # Threshold the vesselness image using Otsu's method to calculate the threshold
         thresh = threshold_otsu(image=vessel_filtered_image)
@@ -109,8 +107,6 @@ class VesselTrackHFM(object):
             vesselMask = np.divide(vesselMask, np.amax(vesselMask)).astype(np.uint8)
 
         _, _, slices = vesselMask.shape
-
-        # np.seterr(all='raise')
 
         seed_slice_idx = np.nan
         for slice_idx in np.arange(slices-1, -1, -1):
