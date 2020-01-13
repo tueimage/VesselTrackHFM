@@ -30,15 +30,23 @@ from agd import HFMUtils
 
 class VesselTrackHFM(object):
 
-    def __init__(self, get_distance_map=True, lmbda=100, p=1.5,
+    def __init__(self,
+                 get_distance_map=True,
+                 sigmas=(1, 10, 1),
+                 alpha=0.5,
+                 beta=0.5,
+                 gamma=15,
+                 lmbda=100,
+                 p=1.5,
                  verbose=True):
         """
         Class that defines HFM solver based vessel tracking algorithm
 
-        :param hfm_solver: (HFMIO object) HFM solver (eg: Isotropic3, Riemannian, Reeds-Shepp etc.)
-        :param out_dir:
         :param get_distance_map: (bool) Flag, if set to True, the hfm solver computes the vessel distance map
-        :param get_geodesic_flow: (bool) Flag, if set to True, the hfm solver produces geodesic flow maps
+        :param sigmas: (tuple) Range of scales to be used in the Frangi filter (scale_range[0], scale_range[1], step_size)
+        :param alpha: (float) Control sensitivity of Frangi filter to diff. between plate-like and line-like structures
+        :param beta: (float) Control sensitivity of Frangi filter to deviation from blob like structure
+        :param gamma: (float) Control senstivity to background noise
         :param lmbda: (int) Parameter for the speed function used by the solver to sharpen filtered image
         :param p: (float) Parameter for the speed function used by the solver to sharpen filtered image
         :param verbose: (bool) Flag, set true for prints
@@ -52,24 +60,27 @@ class VesselTrackHFM(object):
         self.lmbda = lmbda
         self.p = p
         self.verbose = verbose
+        self.sigmas = sigmas
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
 
-    @staticmethod
-    def enhance_vessels(image=None):
+    def enhance_vessels(self, image=None):
         assert (isinstance(image, np.ndarray))
         assert (image.ndim <= 3)
 
         if image.dtype != np.float32:
             image = img_as_float32(image)
 
-        # Smooth image to remove high freq noise
-        # TODO: Better de-noising method specially tailored for DCE MR images
-        image = gaussian(image=image,
-                         sigma=1.5)
+        # FIXME: Better de-noising method specially tailored for DCE MR images
 
         #  Enhance vessels by using Frangi filter
         vessel_filtered_image = frangi(image=image,
-                                       black_ridges=False,
-                                       sigmas=(1, 3, 1))
+                                       sigmas=self.sigmas,
+                                       alpha=self.alpha,
+                                       beta=self.beta,
+                                       gamma=self.gamma,
+                                       black_ridges=False)
 
         # Threshold the vesselness image using Otsu's method to calculate the threshold
         thresh = threshold_otsu(image=vessel_filtered_image)
