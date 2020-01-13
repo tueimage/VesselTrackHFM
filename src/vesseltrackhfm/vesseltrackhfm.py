@@ -124,7 +124,9 @@ class VesselTrackHFM(object):
 
                     # Find largest component among different labels
                     comp_sizes = sum(input=seed_slice, labels=seed_label_array, index=np.arange(1, seed_num_labels + 1))
-                    largest_component_label = list(comp_sizes).index(max(comp_sizes))
+
+                    # Since we ignore label 0 (background), add one to index of largest sum to get "true" label of CC
+                    largest_component_label = list(comp_sizes).index(max(comp_sizes)) + 1
 
                     # This seed-point returns a 2D array with the X and Y co-ordinate of the center-of-mass
                     # of the largest component in the seed_slice
