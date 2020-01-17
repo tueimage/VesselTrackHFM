@@ -99,7 +99,9 @@ class VesselTrackHFM(object):
         # # Apply post-processed mask to the vesselness image to get rid of the noise
         # post_proc_img = np.multiply(vessel_filtered_image, vesselMask_opened)
 
-        post_proc_img = vessel_filtered_image
+        speedR3 = 1 + self.lmbda*np.power(vessel_filtered_image, self.p)
+        post_proc_img = np.array(speedR3, dtype=np.float32)
+
         return post_proc_img, vesselMask
 
     def _find_seed_point(self, vesselMask=None, binarize=False):
@@ -169,8 +171,8 @@ class VesselTrackHFM(object):
                                             binarize=False)
 
         # Construct the speed function for the PDE
-        speedR3 = np.divide(image, np.amax(image)).astype(np.float32)
-        speedR3 = 1 + self.lmbda*np.power(speedR3, self.p)
+        # speedR3 = np.divide(image, np.amax(image)).astype(np.float32)
+        # speedR3 = 1 + self.lmbda*np.power(speedR3, self.p)
 
         if self.verbose is True:
             verbosity = 2
@@ -185,7 +187,7 @@ class VesselTrackHFM(object):
                   'dims': [image.shape[0], image.shape[1], image.shape[2]],
                   # size of a pixel (only for physical dimensions)
                   'gridScale': 1.,
-                  'speed': speedR3,
+                  'speed': image,
                   'seeds': np.array([seed_points]),
                   'exportValues': self.get_distance_map,
                   'exportGeodesicFlow': 1,
