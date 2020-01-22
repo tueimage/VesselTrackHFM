@@ -128,7 +128,7 @@ class VesselTrackHFM(object):
                                            beta=self.beta,
                                            gamma=gamma_opt,
                                            black_ridges=False)
-        except FloatingPointError:  # FIXME
+        except FloatingPointError:  # FIXME -- Can this be predicted beforehand (and then fixed)?
             print('Gamma value {} found to be too large, going with a smaller value of {}'.format(gamma_opt,
                                                                                                   gamma_opt/100))
             vessel_filtered_image = frangi(image=image,

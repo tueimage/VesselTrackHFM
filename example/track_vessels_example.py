@@ -6,10 +6,10 @@ from utils.image_utils import copy_image_metadata
 from skimage.filters import threshold_otsu
 from dataset_creation.extract_roi import LiverImageCreator
 
-LAMBDA = 1e10
+LAMBDA = 1e12
 p = 1.5
 
-IMAGE_DIR = '/home/ishaan/Desktop/UMC_Data/Data/44/20170712'
+IMAGE_DIR = '/home/ishaan/Desktop/UMC_Data/Data/29/20150518'
 
 # Read the DCE MR series
 liver_image_obj = LiverImageCreator(raw_data_dir=IMAGE_DIR,
@@ -19,8 +19,8 @@ dce_img, _, lesion_mask = liver_image_obj.apply_liver_mask()
 
 
 dce_img_np = sitk.GetArrayFromImage(dce_img).transpose((2, 3, 1, 0))
-dce_post_contrast_arr = dce_img_np[:, :, :, 10]
-dce_pre_contrast_arr = dce_img_np[:, :, :, 0]
+dce_post_contrast_arr = dce_img_np[:, :, :, 6]
+dce_pre_contrast_arr = dce_img_np[:, :, :, 5]
 
 # Create subtraction image between post- and pre-contrast phases that highlight the vessels
 subtraction_image = np.subtract(dce_post_contrast_arr, dce_pre_contrast_arr)
@@ -41,9 +41,9 @@ sitk.WriteImage(subtraction_img, 'subtraction_image.nii')
 # Track vessels
 vessel_tracker = VesselTrackHFM(lmbda=LAMBDA,
                                 p=p,
-                                sigmas=(0.5, 4, 0.2),
-                                alpha=0.01,
-                                beta=10,
+                                sigmas=(1, 4, 0.3),
+                                alpha=0.5,
+                                beta=0.5,
                                 )
 
 # Compute distance map and geodesic flow
