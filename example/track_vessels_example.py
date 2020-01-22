@@ -6,10 +6,10 @@ from utils.image_utils import copy_image_metadata
 from skimage.filters import threshold_otsu
 from dataset_creation.extract_roi import LiverImageCreator
 
-LAMBDA = 500
+LAMBDA = 1e10
 p = 1.5
 
-IMAGE_DIR = '/home/ishaan/Desktop/UMC_Data/LesionDetection/Detection/Data/1'
+IMAGE_DIR = '/home/ishaan/Desktop/UMC_Data/Data/44/20170712'
 
 # Read the DCE MR series
 liver_image_obj = LiverImageCreator(raw_data_dir=IMAGE_DIR,
@@ -40,10 +40,14 @@ sitk.WriteImage(subtraction_img, 'subtraction_image.nii')
 
 # Track vessels
 vessel_tracker = VesselTrackHFM(lmbda=LAMBDA,
-                                p=p)
+                                p=p,
+                                sigmas=(0.5, 4, 0.2),
+                                alpha=0.01,
+                                beta=10,
+                                )
 
 # Compute distance map and geodesic flow
-vesselness, distance_map, vesselMask = vessel_tracker(image=subtraction_image)
+vesselness, distance_map = vessel_tracker(image=subtraction_image)
 
 
 # Save the outputs
@@ -55,10 +59,5 @@ distance_map_img = sitk.GetImageFromArray(arr=distance_map.transpose((2, 0, 1)))
 
 distance_map_img.CopyInformation(lesion_mask)
 
-vesselMask_img = sitk.GetImageFromArray(arr=vesselMask.transpose((2, 0, 1)))
-vesselMask_img.CopyInformation(lesion_mask)
-
 sitk.WriteImage(vesselness_img, 'vesselness.nii')
 sitk.WriteImage(distance_map_img, 'distancemap.nii')
-sitk.WriteImage(vesselMask_img, 'vesselMask.nii')
-

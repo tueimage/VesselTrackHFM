@@ -19,13 +19,15 @@ Email: ishaan@isi.uu.nl
 
 import numpy as np
 from skimage import img_as_float32
-from skimage.filters import gaussian
+from scipy.ndimage import gaussian_filter
+from skimage.feature import hessian_matrix, hessian_matrix_eigvals
 from skimage.filters import frangi
 from skimage.filters import threshold_otsu
 from scipy.ndimage import generate_binary_structure
 from scipy.ndimage.measurements import sum
 from scipy.ndimage import label, center_of_mass
 from agd import HFMUtils
+from math import floor
 
 
 class VesselTrackHFM(object):
@@ -65,22 +67,76 @@ class VesselTrackHFM(object):
         self.beta = beta
         self.gamma = gamma
 
+    @staticmethod
+    def smooth_and_sharpen(image=None, alpha=15):
+        """
+        Smoothing and sharpening image before or after applying vesselness filter
+        (Source:  https://scipy-lectures.org/advanced/image_processing/#blurring-smoothing)
+        :param image: (numpy ndarray)
+        :param alpha: (int) Sharpening parameter
+        :return: filt_image: (numpy ndarray)
+        """
+        blurred_image = gaussian_filter(image, 1)
+        filter_blurred_image = gaussian_filter(blurred_image, 0.5)
+        filt_image = blurred_image + alpha*(blurred_image - filter_blurred_image)
+        return filt_image
+
+    def compute_optimal_gamma(self, image):
+        """
+        Compute optimal gamma as 0.5 * max(||hessian_norm(sigma)||)
+
+        :param image: (numpy ndarray)
+        :param sigmas: (tuple) Tuple of scales
+        :return: gamma_opt: (float)
+
+        """
+        hessian_norms = []
+        num_steps = floor((self.sigmas[1]-self.sigmas[0])/self.sigmas[2])
+
+        sigmas = [min(self.sigmas[0] + self.sigmas[2]*step, self.sigmas[1]) for step in range(num_steps)]
+
+        for sigma in sigmas:
+            h_elements = hessian_matrix(image=image, sigma=sigma)
+            h_eigvals = hessian_matrix_eigvals(h_elements)
+            # Since the hessian is real and symmetric, frobenius norm is calculated via eigenvalues
+            frob_norm = np.sqrt(np.sum(np.array([lmbda**2 for lmbda in h_eigvals])))
+            hessian_norms.append(frob_norm)
+
+        gamma_opt = 0.5*max(hessian_norms)
+
+        return gamma_opt
+
     def enhance_vessels(self, image=None):
         assert (isinstance(image, np.ndarray))
         assert (image.ndim <= 3)
 
+        try:
+            gamma_opt = self.compute_optimal_gamma(image=image)
+        except FloatingPointError:
+            gamma_opt = 1500
+
+        print('Optimal value of gamma = {}'.format(gamma_opt))
+
         if image.dtype != np.float32:
             image = img_as_float32(image)
 
-        # FIXME: Better de-noising method specially tailored for DCE MR images
-
         #  Enhance vessels by using Frangi filter
-        vessel_filtered_image = frangi(image=image,
-                                       sigmas=self.sigmas,
-                                       alpha=self.alpha,
-                                       beta=self.beta,
-                                       gamma=self.gamma,
-                                       black_ridges=False)
+        try:
+            vessel_filtered_image = frangi(image=image,
+                                           sigmas=self.sigmas,
+                                           alpha=self.alpha,
+                                           beta=self.beta,
+                                           gamma=gamma_opt,
+                                           black_ridges=False)
+        except FloatingPointError:  # FIXME
+            print('Gamma value {} found to be too large, going with a smaller value of {}'.format(gamma_opt,
+                                                                                                  gamma_opt/100))
+            vessel_filtered_image = frangi(image=image,
+                                           sigmas=self.sigmas,
+                                           alpha=self.alpha,
+                                           beta=self.beta,
+                                           gamma=gamma_opt/100,
+                                           black_ridges=False)
 
         # Threshold the vesselness image using Otsu's method to calculate the threshold
         thresh = threshold_otsu(image=vessel_filtered_image)
@@ -101,7 +157,6 @@ class VesselTrackHFM(object):
 
         speedR3 = 1 + self.lmbda*np.power(vessel_filtered_image, self.p)
         post_proc_img = np.array(speedR3, dtype=np.float32)
-
         return post_proc_img, vesselMask
 
     def _find_seed_point(self, vesselMask=None, binarize=False):
@@ -170,10 +225,6 @@ class VesselTrackHFM(object):
         seed_points = self._find_seed_point(vesselMask=vesselMask,
                                             binarize=False)
 
-        # Construct the speed function for the PDE
-        # speedR3 = np.divide(image, np.amax(image)).astype(np.float32)
-        # speedR3 = 1 + self.lmbda*np.power(speedR3, self.p)
-
         if self.verbose is True:
             verbosity = 2
             showProgress = 1
@@ -209,6 +260,10 @@ class VesselTrackHFM(object):
         :return: distance_map: (numpy ndarray) Distance map w.r.t. vessels (in general tubular structures in image)
         :return: geodesic_flows: (numpy ndarray) Geodesic flow vectors [geodesic_flows.ndim =  image.ndim+1]
         """
+
+        # FIXME: Better de-noising method specially tailored for DCE MR images
+        # image = self.smooth_and_sharpen(image=image)
+
         # Pre-processing of the image to highlight vessels/tubular structures
         vesselness_image, vesselMask = self.enhance_vessels(image=image)
 
