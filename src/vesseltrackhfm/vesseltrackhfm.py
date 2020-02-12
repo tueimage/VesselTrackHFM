@@ -222,8 +222,21 @@ class VesselTrackHFM(object):
 
     def _solve_pde(self, image=None, vesselMask=None):
 
-        seed_points = self._find_seed_point(vesselMask=vesselMask,
-                                            binarize=False)
+        # <axis>_seed_point -- traveses through slices in a direction perpendicular to the axis to find seed-point
+        z_seed_point = self._find_seed_point(vesselMask=vesselMask,
+                                             binarize=False)
+
+        # Exchange X and Z axes of vessel mask
+        x_seed_point = self._find_seed_point(vesselMask=vesselMask.transpose((2, 1, 0)),
+                                             binarize=False)
+        # Swap it back to the right order
+        x_seed_point_swapped = np.array([x_seed_point[2], x_seed_point[1], x_seed_point[0]])
+
+        # Exchange Y and Z axes of vessel mask
+        y_seed_point = self._find_seed_point(vesselMask=vesselMask.transpose((0, 2, 1)),
+                                             binarize=False)
+        # Swap it back to the right order
+        y_seed_point_swapped = np.array([y_seed_point[0], y_seed_point[2], y_seed_point[1]])
 
         if self.verbose is True:
             verbosity = 2
@@ -239,7 +252,7 @@ class VesselTrackHFM(object):
                   # size of a pixel (only for physical dimensions)
                   'gridScale': 1.,
                   'speed': image,
-                  'seeds': np.array([seed_points]),
+                  'seeds': np.array([z_seed_point, x_seed_point_swapped, y_seed_point_swapped]),
                   'exportValues': self.get_distance_map,
                   'exportGeodesicFlow': 1,
                   'verbosity': verbosity,
@@ -272,6 +285,7 @@ class VesselTrackHFM(object):
 
         if self.get_distance_map > 0:
             distance_map = self.output['values']
+            distance_map = self.smooth_and_sharpen(distance_map)
         else:
             distance_map = None
 
