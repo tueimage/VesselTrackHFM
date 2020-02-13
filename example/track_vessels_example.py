@@ -1,12 +1,9 @@
 import SimpleITK as sitk
 import numpy as np
-import os
 from vesseltrackhfm.vesseltrackhfm import VesselTrackHFM
-from utils.image_utils import copy_image_metadata
-from skimage.filters import threshold_otsu
 from dataset_creation.extract_roi import LiverImageCreator
 
-LAMBDA = 1e12
+LAMBDA = 500
 p = 1.5
 
 IMAGE_DIR = '/home/ishaan/Desktop/UMC_Data/Data/29/20150518'
@@ -22,28 +19,27 @@ dce_img_np = sitk.GetArrayFromImage(dce_img).transpose((2, 3, 1, 0))
 dce_post_contrast_arr = dce_img_np[:, :, :, 6]
 dce_pre_contrast_arr = dce_img_np[:, :, :, 5]
 
+
 # Create subtraction image between post- and pre-contrast phases that highlight the vessels
 subtraction_image = np.subtract(dce_post_contrast_arr, dce_pre_contrast_arr)
 subtraction_image = np.where(subtraction_image < 0, 0, subtraction_image)
 
-# Otsu's threhsold on subtraction image
-o_thresh = threshold_otsu(image=subtraction_image)
-
-subtraction_image = np.where(subtraction_image > o_thresh, subtraction_image, 0)
-
 # Save the subtraction image
 subtraction_img = sitk.GetImageFromArray(arr=subtraction_image.transpose((2, 0, 1)))
-
 subtraction_img.CopyInformation(lesion_mask)
-
 sitk.WriteImage(subtraction_img, 'subtraction_image.nii')
 
-# Track vessels
+# Liver veins (portal and hepatic) have diameters in the range 2-26mm
+# In voxel size, this roughly corresponds to a range of 1-17 voxels
+# For a given sigma, only voxels in a 3*sigma radius contribute meaningfully to the convolution
+# Given the range of diameters and image spacing, sigma should be chosen in the range -- [1, 3], technically
+# sigma should start with a value less than 1, but that also introduces a lot of small structures/false positives
 vessel_tracker = VesselTrackHFM(lmbda=LAMBDA,
                                 p=p,
-                                sigmas=(1, 4, 0.3),
+                                sigmas=(0.15, 3, 0.3),
                                 alpha=0.5,
                                 beta=0.5,
+                                gamma=15
                                 )
 
 # Compute distance map and geodesic flow
@@ -52,11 +48,9 @@ vesselness, distance_map = vessel_tracker(image=subtraction_image)
 
 # Save the outputs
 vesselness_img = sitk.GetImageFromArray(arr=vesselness.transpose((2, 0, 1)))
-
 vesselness_img.CopyInformation(lesion_mask)
 
 distance_map_img = sitk.GetImageFromArray(arr=distance_map.transpose((2, 0, 1)))
-
 distance_map_img.CopyInformation(lesion_mask)
 
 sitk.WriteImage(vesselness_img, 'vesselness.nii')

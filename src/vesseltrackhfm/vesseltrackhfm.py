@@ -19,11 +19,11 @@ Email: ishaan@isi.uu.nl
 
 import numpy as np
 from skimage import img_as_float32
-from scipy.ndimage import gaussian_filter
 from skimage.feature import hessian_matrix, hessian_matrix_eigvals
 from skimage.filters import frangi
 from skimage.filters import threshold_otsu
 from scipy.ndimage import generate_binary_structure
+from medpy.filter.smoothing import anisotropic_diffusion
 from scipy.ndimage.measurements import sum
 from scipy.ndimage import label, center_of_mass
 from agd import HFMUtils
@@ -67,20 +67,6 @@ class VesselTrackHFM(object):
         self.beta = beta
         self.gamma = gamma
 
-    @staticmethod
-    def smooth_and_sharpen(image=None, alpha=15):
-        """
-        Smoothing and sharpening image before or after applying vesselness filter
-        (Source:  https://scipy-lectures.org/advanced/image_processing/#blurring-smoothing)
-        :param image: (numpy ndarray)
-        :param alpha: (int) Sharpening parameter
-        :return: filt_image: (numpy ndarray)
-        """
-        blurred_image = gaussian_filter(image, 1)
-        filter_blurred_image = gaussian_filter(blurred_image, 0.5)
-        filt_image = blurred_image + alpha*(blurred_image - filter_blurred_image)
-        return filt_image
-
     def compute_optimal_gamma(self, image):
         """
         Compute optimal gamma as 0.5 * max(||hessian_norm(sigma)||)
@@ -110,56 +96,37 @@ class VesselTrackHFM(object):
         assert (isinstance(image, np.ndarray))
         assert (image.ndim <= 3)
 
-        try:
-            gamma_opt = self.compute_optimal_gamma(image=image)
-        except FloatingPointError:
-            gamma_opt = 1500
-
-        print('Optimal value of gamma = {}'.format(gamma_opt))
-
         if image.dtype != np.float32:
             image = img_as_float32(image)
 
-        #  Enhance vessels by using Frangi filter
-        try:
-            vessel_filtered_image = frangi(image=image,
-                                           sigmas=self.sigmas,
-                                           alpha=self.alpha,
-                                           beta=self.beta,
-                                           gamma=gamma_opt,
-                                           black_ridges=False)
-        except FloatingPointError:  # FIXME -- Can this be predicted beforehand (and then fixed)?
-            print('Gamma value {} found to be too large, going with a smaller value of {}'.format(gamma_opt,
-                                                                                                  gamma_opt/100))
-            vessel_filtered_image = frangi(image=image,
-                                           sigmas=self.sigmas,
-                                           alpha=self.alpha,
-                                           beta=self.beta,
-                                           gamma=gamma_opt/100,
-                                           black_ridges=False)
+        # Apply anisotropic diffusion filtering
+        # Option 1 corresponds to exponential function of gradient magnitude as conduction co-eff
+        image = anisotropic_diffusion(img=image,
+                                      niter=10,
+                                      kappa=50,
+                                      voxelspacing=np.array([1.543, 1.543, 1.543]),
+                                      option=1)
+
+        vessel_filtered_image = frangi(image=image,
+                                       sigmas=self.sigmas,
+                                       alpha=self.alpha,
+                                       beta=self.beta,
+                                       gamma=self.gamma,
+                                       black_ridges=False)
+
+        print('Max intensity for vesselness output = {}'.format(np.amax(vessel_filtered_image)))
 
         # Threshold the vesselness image using Otsu's method to calculate the threshold
         thresh = threshold_otsu(image=vessel_filtered_image)
         # Use the threshold to create a binary mask
         vesselMask = np.where(vessel_filtered_image >= thresh, 1, 0).astype(np.uint8)
 
-        # Disabling post-processing of the Frangi filtered image (on Erik's suggestion)
-        # se_erosion = generate_binary_structure(rank=vesselMask.ndim, connectivity=2)
-        # se_dilation = generate_binary_structure(rank=vesselMask.ndim, connectivity=8)
-        #
-        # #  Perform erosion-dilation instead of opening to have better fine grain control
-        # #  (iterations, different structure elements etc.)
-        # vesselMask_erosion = binary_erosion(input=vesselMask, structure=se_erosion, iterations=2).astype(vesselMask.dtype)
-        # vesselMask_opened = binary_dilation(input=vesselMask_erosion, structure=se_dilation, iterations=3).astype(vesselMask.dtype)
-        #
-        # # Apply post-processed mask to the vesselness image to get rid of the noise
-        # post_proc_img = np.multiply(vessel_filtered_image, vesselMask_opened)
-
         speedR3 = 1 + self.lmbda*np.power(vessel_filtered_image, self.p)
         post_proc_img = np.array(speedR3, dtype=np.float32)
         return post_proc_img, vesselMask
 
-    def _find_seed_point(self, vesselMask=None, binarize=False):
+    @staticmethod
+    def _find_seed_point(vesselMask=None, binarize=False):
         """
         The HFM solver requires seed-points to track vessels, this function automates that process.
         Z-axis (dim=2) in the DCE image is the floor-ceiling axis (w.r.t scanner). Therefore we select a seed-point
@@ -205,9 +172,6 @@ class VesselTrackHFM(object):
                     if np.isnan(slice_seed_point[0]) or np.isnan(slice_seed_point[1]):
                         continue
                     else:
-                        if self.verbose is True:
-                            print('Seed-point selected : [{}, {}, {}]'.format(slice_seed_point[0], slice_seed_point[1],
-                                                                              seed_slice_idx))
                         break
                 else:
                     continue
@@ -222,21 +186,29 @@ class VesselTrackHFM(object):
 
     def _solve_pde(self, image=None, vesselMask=None):
 
+        # TODO: Improve and validate seed-point selection
         # <axis>_seed_point -- traveses through slices in a direction perpendicular to the axis to find seed-point
         z_seed_point = self._find_seed_point(vesselMask=vesselMask,
                                              binarize=False)
 
+        print('Seed-point perpendicular to Z-axis = {}. {}, {}'.format(z_seed_point[1], z_seed_point[0], z_seed_point[2]))
         # Exchange X and Z axes of vessel mask
-        x_seed_point = self._find_seed_point(vesselMask=vesselMask.transpose((2, 1, 0)),
+        x_seed_point = self._find_seed_point(vesselMask=vesselMask.transpose((0, 2, 1)),
                                              binarize=False)
         # Swap it back to the right order
-        x_seed_point_swapped = np.array([x_seed_point[2], x_seed_point[1], x_seed_point[0]])
+        x_seed_point_swapped = np.array([x_seed_point[0], x_seed_point[2], x_seed_point[1]])
+
+        print('Seed-point perpendicular to X-axis = {}, {}, {}'.format(x_seed_point_swapped[1], x_seed_point_swapped[0],
+                                                                       x_seed_point_swapped[2]))
 
         # Exchange Y and Z axes of vessel mask
-        y_seed_point = self._find_seed_point(vesselMask=vesselMask.transpose((0, 2, 1)),
+        y_seed_point = self._find_seed_point(vesselMask=vesselMask.transpose((2, 1, 0)),
                                              binarize=False)
         # Swap it back to the right order
-        y_seed_point_swapped = np.array([y_seed_point[0], y_seed_point[2], y_seed_point[1]])
+        y_seed_point_swapped = np.array([y_seed_point[2], y_seed_point[1], y_seed_point[0]])
+
+        print('Seed-point perpendicular to the Y-axis = {}, {}, {}'.format(y_seed_point_swapped[1], y_seed_point_swapped[0],
+                                                                           y_seed_point_swapped[2]))
 
         if self.verbose is True:
             verbosity = 2
@@ -275,7 +247,7 @@ class VesselTrackHFM(object):
         """
 
         # FIXME: Better de-noising method specially tailored for DCE MR images
-        # image = self.smooth_and_sharpen(image=image)
+        # TODO: Diffusion filtering
 
         # Pre-processing of the image to highlight vessels/tubular structures
         vesselness_image, vesselMask = self.enhance_vessels(image=image)
@@ -285,7 +257,6 @@ class VesselTrackHFM(object):
 
         if self.get_distance_map > 0:
             distance_map = self.output['values']
-            distance_map = self.smooth_and_sharpen(distance_map)
         else:
             distance_map = None
 
