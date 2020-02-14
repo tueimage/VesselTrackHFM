@@ -69,7 +69,7 @@ class VesselTrackHFM(object):
 
     def compute_optimal_gamma(self, image):
         """
-        Compute optimal gamma as 0.5 * max(||hessian_norm(sigma)||)
+        Compute optimal gamma as 0.5 * max(||hessian_norm(sigma)||) as shown in Frangi et al. (1998)
 
         :param image: (numpy ndarray)
         :param sigmas: (tuple) Tuple of scales
@@ -239,12 +239,21 @@ class VesselTrackHFM(object):
         """
 
         # Apply anisotropic diffusion filtering
-        # Option 1 corresponds to exponential function of gradient magnitude as conduction co-eff
-        image = anisotropic_diffusion(img=image,
-                                      niter=10,
-                                      kappa=50,
-                                      voxelspacing=np.array([1.543, 1.543, 1.543]),
-                                      option=1)
+        # Option 1 corresponds to exponential function of gradient magnitude as conduction co-eff as shown in
+        # 'Scale-Space and Edge Detection Using Anisotropic Diffusion' Perona and Malik (1990)
+        # Option 3 corresponds to the conduction co-efficient given in 'Robust Anistropic Diffusion' by Black et al.
+        # This option seems to fix underflow occurring in certain images
+        try:
+            image = anisotropic_diffusion(img=image,
+                                          niter=10,
+                                          kappa=50,
+                                          option=3)
+        except FloatingPointError:  # Underflow because of large kappa
+            print('Underflow ocuured, choosing a smaller kappa')
+            image = anisotropic_diffusion(img=image,
+                                          niter=10,
+                                          kappa=25,
+                                          option=3)
 
         # Pre-processing of the image to highlight vessels/tubular structures
         vesselness_image, vesselMask = self.enhance_vessels(image=image)
