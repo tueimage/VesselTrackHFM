@@ -3,8 +3,8 @@ import numpy as np
 from vesseltrackhfm.vesseltrackhfm import VesselTrackHFM
 from dataset_creation.extract_roi import LiverImageCreator
 
-LAMBDA = 500
-p = 1.5
+LAMBDA = 1e4
+p = 1.0
 
 IMAGE_DIR = '/home/ishaan/Desktop/UMC_Data/Data/29/20150518'
 
@@ -37,7 +37,7 @@ sitk.WriteImage(subtraction_img, 'subtraction_image.nii')
 # in the filter output
 vessel_tracker = VesselTrackHFM(lmbda=LAMBDA,
                                 p=p,
-                                sigmas=(0.15, 3, 0.3),
+                                sigmas=(0.3, 3, 0.3),
                                 alpha=0.5,
                                 beta=0.5,
                                 gamma=15
