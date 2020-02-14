@@ -34,6 +34,7 @@ sitk.WriteImage(subtraction_img, 'subtraction_image.nii')
 # For a given sigma, only voxels in a 3*sigma radius contribute meaningfully to the convolution
 # Given the range of diameters and image spacing, sigma should be chosen in the range -- [1, 3], technically
 # sigma should start with a value less than 1, but that also introduces a lot of small structures/false positives
+# in the filter output
 vessel_tracker = VesselTrackHFM(lmbda=LAMBDA,
                                 p=p,
                                 sigmas=(0.15, 3, 0.3),
