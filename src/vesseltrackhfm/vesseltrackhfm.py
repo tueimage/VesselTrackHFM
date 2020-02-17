@@ -108,10 +108,10 @@ class VesselTrackHFM(object):
 
         print('Max intensity for vesselness output = {}'.format(np.amax(vessel_filtered_image)))
 
-        # Threshold the vesselness image using Otsu's method to calculate the threshold
-        thresh = threshold_otsu(image=vessel_filtered_image)
+        max_vesselness_response = np.amax(vessel_filtered_image)
+        thresh_value = 0.9*max_vesselness_response
         # Use the threshold to create a binary mask
-        vesselMask = np.where(vessel_filtered_image >= thresh, 1, 0).astype(np.uint8)
+        vesselMask = np.where(vessel_filtered_image >= thresh_value, 1, 0).astype(np.uint8)
 
         speedR3 = 1 + self.lmbda*np.power(vessel_filtered_image, self.p)
         post_proc_img = np.array(speedR3, dtype=np.float32)
@@ -141,9 +141,9 @@ class VesselTrackHFM(object):
             nz_indices = np.nonzero(vesselMask[:, :, slice_idx])
             if nz_indices[0].size != 0 and nz_indices[1].size != 0:
                 mask_slice = vesselMask[:, :, slice_idx]
-                se_cc = generate_binary_structure(rank=mask_slice.ndim, connectivity=8)
+                se_cc = generate_binary_structure(rank=mask_slice.ndim, connectivity=4)
                 labelled_array, num_labels = label(mask_slice, se_cc)
-                if num_labels > 1:
+                if num_labels >= 1:
                     seed_slice_idx = slice_idx
                     seed_label_array = labelled_array
                     seed_num_labels = num_labels
