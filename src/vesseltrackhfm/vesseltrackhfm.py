@@ -109,7 +109,7 @@ class VesselTrackHFM(object):
         print('Max intensity for vesselness output = {}'.format(np.amax(vessel_filtered_image)))
 
         max_vesselness_response = np.amax(vessel_filtered_image)
-        thresh_value = 0.9*max_vesselness_response
+        thresh_value = 0.8*max_vesselness_response
         # Use the threshold to create a binary mask
         vesselMask = np.where(vessel_filtered_image >= thresh_value, 1, 0).astype(np.uint8)
 
@@ -180,12 +180,15 @@ class VesselTrackHFM(object):
 
         # TODO: Improve and validate seed-point selection
         # <axis>_seed_point -- traveses through slices in a direction perpendicular to the axis to find seed-point
-        z_seed_point = self._find_seed_point(vesselMask=vesselMask,
+
+        eff_vesselMask = vesselMask[:, :, :-10]
+
+        z_seed_point = self._find_seed_point(vesselMask=eff_vesselMask,
                                              binarize=False)
 
         print('Seed-point perpendicular to Z-axis = {}. {}, {}'.format(z_seed_point[1], z_seed_point[0], z_seed_point[2]))
         # Exchange X and Z axes of vessel mask
-        x_seed_point = self._find_seed_point(vesselMask=vesselMask.transpose((0, 2, 1)),
+        x_seed_point = self._find_seed_point(vesselMask=eff_vesselMask.transpose((0, 2, 1)),
                                              binarize=False)
         # Swap it back to the right order
         x_seed_point_swapped = np.array([x_seed_point[0], x_seed_point[2], x_seed_point[1]])
@@ -194,7 +197,7 @@ class VesselTrackHFM(object):
                                                                        x_seed_point_swapped[2]))
 
         # Exchange Y and Z axes of vessel mask
-        y_seed_point = self._find_seed_point(vesselMask=vesselMask.transpose((2, 1, 0)),
+        y_seed_point = self._find_seed_point(vesselMask=eff_vesselMask.transpose((2, 1, 0)),
                                              binarize=False)
         # Swap it back to the right order
         y_seed_point_swapped = np.array([y_seed_point[2], y_seed_point[1], y_seed_point[0]])
