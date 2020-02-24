@@ -19,15 +19,16 @@ Email: ishaan@isi.uu.nl
 
 import numpy as np
 from skimage import img_as_float32
-from skimage.feature import hessian_matrix, hessian_matrix_eigvals
+from skimage.feature.corner import hessian_matrix, _hessian_matrix_image
 from skimage.filters import frangi
 from skimage.filters import threshold_otsu
 from scipy.ndimage import generate_binary_structure
 from medpy.filter.smoothing import anisotropic_diffusion
-from scipy.ndimage.measurements import sum
+import scipy.ndimage.measurements
 from scipy.ndimage import label, center_of_mass
 from agd import HFMUtils
-from math import floor
+from math import floor, ceil
+from skimage.filters.ridges import _divide_nonzero
 
 
 class VesselTrackHFM(object):
@@ -67,31 +68,6 @@ class VesselTrackHFM(object):
         self.beta = beta
         self.gamma = gamma
 
-    def compute_optimal_gamma(self, image):
-        """
-        Compute optimal gamma as 0.5 * max(||hessian_norm(sigma)||) as shown in Frangi et al. (1998)
-
-        :param image: (numpy ndarray)
-        :param sigmas: (tuple) Tuple of scales
-        :return: gamma_opt: (float)
-
-        """
-        hessian_norms = []
-        num_steps = floor((self.sigmas[1]-self.sigmas[0])/self.sigmas[2])
-
-        sigmas = [min(self.sigmas[0] + self.sigmas[2]*step, self.sigmas[1]) for step in range(num_steps)]
-
-        for sigma in sigmas:
-            h_elements = hessian_matrix(image=image, sigma=sigma)
-            h_eigvals = hessian_matrix_eigvals(h_elements)
-            # Since the hessian is real and symmetric, frobenius norm is calculated via eigenvalues
-            frob_norm = np.sqrt(np.sum(np.array([lmbda**2 for lmbda in h_eigvals])))
-            hessian_norms.append(frob_norm)
-
-        gamma_opt = 0.5*max(hessian_norms)
-
-        return gamma_opt
-
     def enhance_vessels(self, image=None):
         assert (isinstance(image, np.ndarray))
         assert (image.ndim <= 3)
@@ -108,7 +84,8 @@ class VesselTrackHFM(object):
 
         print('Max intensity for vesselness output = {}'.format(np.amax(vessel_filtered_image)))
 
-        max_vesselness_response = np.amax(vessel_filtered_image)
+        #  Exclude extremal slices while calculating maximum
+        max_vesselness_response = np.amax(vessel_filtered_image[:, :, :-10])
         thresh_value = 0.8*max_vesselness_response
         # Use the threshold to create a binary mask
         vesselMask = np.where(vessel_filtered_image >= thresh_value, 1, 0).astype(np.uint8)
@@ -150,7 +127,8 @@ class VesselTrackHFM(object):
                     seed_slice = vesselMask[:, :, seed_slice_idx]
 
                     # Find largest component among different labels
-                    comp_sizes = sum(input=seed_slice, labels=seed_label_array, index=np.arange(1, seed_num_labels + 1))
+                    comp_sizes = scipy.ndimage.measurements.sum(input=seed_slice, labels=seed_label_array,
+                                                                index=np.arange(1, seed_num_labels + 1))
 
                     # Since we ignore label 0 (background), add one to index of largest sum to get "true" label of CC
                     largest_component_label = list(comp_sizes).index(max(comp_sizes)) + 1
@@ -175,6 +153,124 @@ class VesselTrackHFM(object):
         seed_point = [slice_seed_point[0], slice_seed_point[1], seed_slice_idx]
 
         return np.array(seed_point)
+
+    def create_riemannian_metric_tensor(self, image=None):
+        """
+
+        Create metric tensor for a Reimannian manifold such that shortest paths (geodesics) between any 2 points
+        lie along vessels
+
+        :param image: (numpy ndarray) 3D image
+        :param scales: (tuple) List of sigmas to compute the Hessian over the appropriate range of scales
+                              (start, end, step)
+        :return: M: (numpy ndarray)
+        """
+
+        assert (image.ndim == 3)  # This method works only for 3D images
+        assert (len(self.sigmas) == 3)
+
+        num_steps = floor((self.sigmas[1] - self.sigmas[0])/self.sigmas[2])
+        scale_range = [self.sigmas[0]]
+        for step in range(num_steps):
+            scale = self.sigmas[0] + min(self.sigmas[1], self.sigmas[0] + step*self.sigmas[2])
+            scale_range.append(scale)
+
+        alpha_sq = 2*self.alpha**2
+        beta_sq = 2*self.beta**2
+        gamma_sq = 2*self.gamma**2
+        filtered_array = np.zeros(shape=(len(scale_range), image.shape[0], image.shape[1], image.shape[2]),
+                                  dtype=np.float32)
+
+        lambdas_array = np.zeros_like(filtered_array, dtype=np.float32)
+
+        eigenvals_at_all_scales = np.zeros(shape=(len(scale_range), image.shape[0], image.shape[1], image.shape[2], 3),
+                                           dtype=np.float32)
+
+        eigenvecs_at_all_scales = np.zeros(shape=(len(scale_range), image.shape[0], image.shape[1], image.shape[2], 3, 3),
+                                           dtype=np.float32)
+
+        for idx, sigma in enumerate(scale_range):
+            print('Hessian eigen-analysis for scale : {}'.format(sigma))
+            H_elems = hessian_matrix(image=image,
+                                     sigma=sigma)
+
+            # Correct for scale (Line 148 of ridges.py)
+            H_elems = [(sigma**2)*e for e in H_elems]
+
+            image_hessian_matrix = _hessian_matrix_image(H_elems)
+
+            eigvalues, eigvecs = np.linalg.eigh(a=image_hessian_matrix)
+
+            eigvalues, eigvecs = self.sort_eigenvalues_by_mod(eigvalues, eigvecs)
+
+            # Transpose to re-use a lot of skimage code (inclduing sorting by value + frangi resp calculation)
+
+            # Frangi code from from skimage: filter/ridges.py line 472
+            # We need the frangi response to select the right scale for each voxel position while constructing
+            # the metric tensor
+            # Swap axes to enable maximum re-use of scipy frangi code
+            lambda1, *lambdas = np.transpose(eigvalues, (3, 0, 1, 2))
+
+            r_a = _divide_nonzero(*lambdas) ** 2
+
+            # Compute sensitivity to deviation from a blob-like structure,
+            # see equations (10) and (15) in reference [1]_,
+            # np.abs(lambda2) in 2D, np.sqrt(np.abs(lambda2 * lambda3)) in 3D
+            filtered_raw = np.abs(np.multiply.reduce(lambdas)) ** (1 / len(lambdas))
+            r_b = _divide_nonzero(lambda1, filtered_raw) ** 2
+
+            # Compute sensitivity to areas of high variance/texture/structure,
+            # see equation (12)in reference [1]_
+            r_g = sum([lambda1 ** 2] + [lambdai ** 2 for lambdai in lambdas])
+
+            # Compute output image for given (sigma) scale and store results in
+            # (n+1)D matrices, see equations (13) and (15) in reference [1]_
+            filtered_array[idx] = ((1 - np.exp(-r_a / alpha_sq)) * np.exp(-r_b / beta_sq) *
+                                   (1 - np.exp(-r_g / gamma_sq)))
+
+            eigenvals_at_all_scales[idx] = eigvalues
+            eigenvecs_at_all_scales[idx] = eigvecs
+            lambdas_array[idx] = np.max(lambdas, axis=0)  # Store the max value of orthogonal eigenvalues
+
+        filtered_array[lambdas_array > 0] = 0
+        arg_max_over_scales = np.argmax(filtered_array, axis=0)
+        filter_response_multiscale = np.empty_like(arg_max_over_scales, dtype=np.float32)
+        eigenvals_multiscale = np.empty(shape=(image.shape[0], image.shape[1], image.shape[2], 3), dtype=np.float32)
+        eigenvecs_multiscale = np.empty(shape=(image.shape[0], image.shape[1], image.shape[2], 3, 3), dtype=np.float32)
+
+        # TODO: Fix this!!!!
+        for y in range(arg_max_over_scales.shape[0]):
+            for x in range(arg_max_over_scales.shape[1]):
+                for z in range(arg_max_over_scales.shape[2]):
+                    filter_response_multiscale[y, x, z] = filtered_array[arg_max_over_scales[y, x, z], y, x, z]
+                    eigenvals_multiscale[y, x, z, :] = eigenvals_at_all_scales[arg_max_over_scales[y, x, z], y, x, z, :]
+                    eigenvecs_multiscale[y, x, z, :, :] = eigenvecs_at_all_scales[arg_max_over_scales[y, x, z], y, x, z, :, :]
+
+        return filter_response_multiscale
+
+    @staticmethod
+    def sort_eigenvalues_by_mod(eigenValues, eigenVectors):
+        """
+        Sort eigenvalues by their absolute values and re-organize the eigenvectors in the same
+        order
+
+        Modified from: https://stackoverflow.com/questions/43194671/sorted-eigenvalues-and-eigenvectors-on-a-grid
+        """
+
+        # Swap the axes for the sorting solution to work
+        eigenValues_swapped_axes = eigenValues.transpose((-1, 0, 1, 2))
+        eigenVectors_swapped_axes = eigenVectors.transpose((4, 3, 0, 1, 2))
+
+        y, x, z, _ = eigenValues.shape
+        sorted_idx = np.argsort(np.abs(eigenValues_swapped_axes), axis=0)  # Last axis
+        eigenValues_swapped_axes = np.take_along_axis(eigenValues_swapped_axes, sorted_idx, axis=0)
+        eigenVectors_swapped_axes = eigenVectors_swapped_axes[(sorted_idx[:, None, ...], ) + tuple(np.ogrid[:3, :y, :x, :z])]
+
+        # Swap back the axes to original order for the rest of the program to work
+        eigenValues = eigenValues_swapped_axes.transpose((1, 2, 3, 0))
+        eigenVectors = eigenVectors_swapped_axes.transpose((2, 3, 4, 1, 0))
+
+        return eigenValues, eigenVectors
 
     def _solve_pde(self, image=None, vesselMask=None):
 
