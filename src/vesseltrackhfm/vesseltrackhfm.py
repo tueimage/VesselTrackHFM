@@ -3,7 +3,8 @@ A vessel tracking method based on a data-driven PDE based approach.
 The PDE solver based on the Hamiltonian Fast Marching method used can
 be found at : https://github.com/Mirebeau/HamiltonFastMarching
 
-The HFM-based PDE solver computes a distance-map w.r.t tubular structures in the image
+The HFM-based PDE solver computes a distance-map w.r.t a source point(s) such that distances are small along
+tubular structures in the image
 
 The vessel tracking method is described in the following papers:
 1. 'A PDE Approach to Data-Driven Sub-Riemannian Geodesics in SE(2)' by Bekkers et al.
@@ -21,13 +22,12 @@ import numpy as np
 from skimage import img_as_float32
 from skimage.feature.corner import hessian_matrix, _hessian_matrix_image
 from skimage.filters import frangi
-from skimage.filters import threshold_otsu
 from scipy.ndimage import generate_binary_structure
 from medpy.filter.smoothing import anisotropic_diffusion
 import scipy.ndimage.measurements
 from scipy.ndimage import label, center_of_mass
 from agd import HFMUtils
-from math import floor, ceil
+from math import floor
 from skimage.filters.ridges import _divide_nonzero
 
 
@@ -154,30 +154,28 @@ class VesselTrackHFM(object):
 
         return np.array(seed_point)
 
-    def create_riemannian_metric_tensor(self, image=None):
+    def _multiscale_hessian_eigenanalysis(self, image=None):
         """
-
-        Create metric tensor for a Reimannian manifold such that shortest paths (geodesics) between any 2 points
-        lie along vessels
+        Analyze eigenvalues and eigenvectors of image hessian at multiple scales
+        For each voxel, scale with the best response to the Frangi vesselness filter is chosen
+        and eigenvalues and eigenvectors for that scale are returned (along with the vesselness image).
+        The eigenvalues returned are sorted (ascending) according to their absolute values
 
         :param image: (numpy ndarray) 3D image
-        :param scales: (tuple) List of sigmas to compute the Hessian over the appropriate range of scales
-                              (start, end, step)
-        :return: M: (numpy ndarray)
+        :return: eigenvals_multiscale: (numpy ndarray) Eigen-values at "best scale" at each location, shape: (Y, X, Z, 3)
+        :return: eigenvecs_multiscale: (numpy ndarray) Shape: (Y, X, Z, 3, 3)
+        :return vesselness_multiscale: (numpy ndarray) Frangi vesselness, shape : (Y, X, Z)
         """
+        num_steps = floor((self.sigmas[1] - self.sigmas[0]) / self.sigmas[2])
 
-        assert (image.ndim == 3)  # This method works only for 3D images
-        assert (len(self.sigmas) == 3)
-
-        num_steps = floor((self.sigmas[1] - self.sigmas[0])/self.sigmas[2])
         scale_range = [self.sigmas[0]]
         for step in range(num_steps):
-            scale = self.sigmas[0] + min(self.sigmas[1], self.sigmas[0] + step*self.sigmas[2])
+            scale = self.sigmas[0] + min(self.sigmas[1], self.sigmas[0] + step * self.sigmas[2])
             scale_range.append(scale)
 
-        alpha_sq = 2*self.alpha**2
-        beta_sq = 2*self.beta**2
-        gamma_sq = 2*self.gamma**2
+        alpha_sq = 2 * self.alpha ** 2
+        beta_sq = 2 * self.beta ** 2
+        gamma_sq = 2 * self.gamma ** 2
         filtered_array = np.zeros(shape=(len(scale_range), image.shape[0], image.shape[1], image.shape[2]),
                                   dtype=np.float32)
 
@@ -195,7 +193,8 @@ class VesselTrackHFM(object):
                                      sigma=sigma)
 
             # Correct for scale (Line 148 of ridges.py)
-            H_elems = [(sigma**2)*e for e in H_elems]
+            #
+            H_elems = [(sigma ** 2) * e for e in H_elems]
 
             image_hessian_matrix = _hessian_matrix_image(H_elems)
 
@@ -234,19 +233,43 @@ class VesselTrackHFM(object):
 
         filtered_array[lambdas_array > 0] = 0
         arg_max_over_scales = np.argmax(filtered_array, axis=0)
-        filter_response_multiscale = np.empty_like(arg_max_over_scales, dtype=np.float32)
+        vesselness_multiscale = np.empty_like(arg_max_over_scales, dtype=np.float32)
         eigenvals_multiscale = np.empty(shape=(image.shape[0], image.shape[1], image.shape[2], 3), dtype=np.float32)
         eigenvecs_multiscale = np.empty(shape=(image.shape[0], image.shape[1], image.shape[2], 3, 3), dtype=np.float32)
 
-        # TODO: Fix this!!!!
+        # TODO: Fix this!!!! Indexing works weird for > 3 dimensions
         for y in range(arg_max_over_scales.shape[0]):
             for x in range(arg_max_over_scales.shape[1]):
                 for z in range(arg_max_over_scales.shape[2]):
-                    filter_response_multiscale[y, x, z] = filtered_array[arg_max_over_scales[y, x, z], y, x, z]
-                    eigenvals_multiscale[y, x, z, :] = eigenvals_at_all_scales[arg_max_over_scales[y, x, z], y, x, z, :]
-                    eigenvecs_multiscale[y, x, z, :, :] = eigenvecs_at_all_scales[arg_max_over_scales[y, x, z], y, x, z, :, :]
+                    vesselness_multiscale[y, x, z] = \
+                        filtered_array[arg_max_over_scales[y, x, z], y, x, z]
 
-        return filter_response_multiscale
+                    eigenvals_multiscale[y, x, z, :] = \
+                        eigenvals_at_all_scales[arg_max_over_scales[y, x, z], y, x, z, :]
+
+                    eigenvecs_multiscale[y, x, z, :, :] = \
+                        eigenvecs_at_all_scales[arg_max_over_scales[y, x, z], y, x, z, :, :]
+
+        return eigenvals_multiscale, eigenvecs_multiscale, vesselness_multiscale
+
+    def create_riemannian_metric_tensor(self, image=None):
+        """
+
+        Create metric tensor for a Reimannian manifold such that shortest paths (geodesics) between any 2 points
+        lie along vessels
+
+        :param image: (numpy ndarray) 3D image
+        :param scales: (tuple) List of sigmas to compute the Hessian over the appropriate range of scales
+                              (start, end, step)
+        :return: M: (numpy ndarray)
+        """
+
+        assert (image.ndim == 3)  # This method works only for 3D images
+        assert (len(self.sigmas) == 3)
+        eigenvals, eigenvecs, vesselness = self._multiscale_hessian_eigenanalysis(image=image)
+
+        # TODO: Define Riemannian metric tensor using eigenvalues and eigenvectors of the image hessian
+        return vesselness
 
     @staticmethod
     def sort_eigenvalues_by_mod(eigenValues, eigenVectors):
@@ -264,7 +287,8 @@ class VesselTrackHFM(object):
         y, x, z, _ = eigenValues.shape
         sorted_idx = np.argsort(np.abs(eigenValues_swapped_axes), axis=0)  # Last axis
         eigenValues_swapped_axes = np.take_along_axis(eigenValues_swapped_axes, sorted_idx, axis=0)
-        eigenVectors_swapped_axes = eigenVectors_swapped_axes[(sorted_idx[:, None, ...], ) + tuple(np.ogrid[:3, :y, :x, :z])]
+        eigenVectors_swapped_axes = eigenVectors_swapped_axes[(sorted_idx[:, None, ...], )
+                                                              + tuple(np.ogrid[:3, :y, :x, :z])]
 
         # Swap back the axes to original order for the rest of the program to work
         eigenValues = eigenValues_swapped_axes.transpose((1, 2, 3, 0))
