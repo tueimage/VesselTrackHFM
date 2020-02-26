@@ -27,8 +27,9 @@ from medpy.filter.smoothing import anisotropic_diffusion
 import scipy.ndimage.measurements
 from scipy.ndimage import label, center_of_mass
 from agd import HFMUtils
+from agd.Metrics import Riemann
 from math import floor
-from skimage.filters.ridges import _divide_nonzero
+from skimage.filters.ridges import _divide_nonzero, _sortbyabs
 
 
 class VesselTrackHFM(object):
@@ -41,7 +42,8 @@ class VesselTrackHFM(object):
                  gamma=15,
                  lmbda=100,
                  p=1.5,
-                 verbose=True):
+                 verbose=True,
+                 model='isotropic'):
         """
         Class that defines HFM solver based vessel tracking algorithm
 
@@ -67,6 +69,7 @@ class VesselTrackHFM(object):
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
+        self.model = model
 
     def enhance_vessels(self, image=None):
         assert (isinstance(image, np.ndarray))
@@ -93,6 +96,15 @@ class VesselTrackHFM(object):
         speedR3 = 1 + self.lmbda*np.power(vessel_filtered_image, self.p)
         post_proc_img = np.array(speedR3, dtype=np.float32)
         return post_proc_img, vesselMask
+
+    @staticmethod
+    def create_vessel_mask(image):
+        #  Exclude extremal slices while calculating maximum
+        max_vesselness_response = np.amax(image[:, :, :-10])
+        thresh_value = 0.8*max_vesselness_response
+        # Use the threshold to create a binary mask
+        vesselMask = np.where(image >= thresh_value, 1, 0).astype(np.uint8)
+        return vesselMask
 
     @staticmethod
     def _find_seed_point(vesselMask=None, binarize=False):
@@ -162,8 +174,10 @@ class VesselTrackHFM(object):
         The eigenvalues returned are sorted (ascending) according to their absolute values
 
         :param image: (numpy ndarray) 3D image
-        :return: eigenvals_multiscale: (numpy ndarray) Eigen-values at "best scale" at each location, shape: (Y, X, Z, 3)
-        :return: eigenvecs_multiscale: (numpy ndarray) Shape: (Y, X, Z, 3, 3)
+        :return: hessian_multiscale: (numpy ndarray) Shape: (Y, X, Z, 3, 3) Structure tensor with hessian of
+                                     "best scale" for each location
+        :return: eigenvals_multiscale: (numpy ndarray) Eigen-values at "best scale" at each location
+                                       (sorted by absolute value), shape: (Y, X, Z, 3)
         :return vesselness_multiscale: (numpy ndarray) Frangi vesselness, shape : (Y, X, Z)
         """
         num_steps = floor((self.sigmas[1] - self.sigmas[0]) / self.sigmas[2])
@@ -184,8 +198,8 @@ class VesselTrackHFM(object):
         eigenvals_at_all_scales = np.zeros(shape=(len(scale_range), image.shape[0], image.shape[1], image.shape[2], 3),
                                            dtype=np.float32)
 
-        eigenvecs_at_all_scales = np.zeros(shape=(len(scale_range), image.shape[0], image.shape[1], image.shape[2], 3, 3),
-                                           dtype=np.float32)
+        hessian_at_all_scales = np.zeros(shape=(len(scale_range), image.shape[0], image.shape[1], image.shape[2], 3, 3),
+                                         dtype=np.float32)
 
         for idx, sigma in enumerate(scale_range):
             print('Hessian eigen-analysis for scale : {}'.format(sigma))
@@ -198,12 +212,11 @@ class VesselTrackHFM(object):
 
             image_hessian_matrix = _hessian_matrix_image(H_elems)
 
-            eigvalues, eigvecs = np.linalg.eigh(a=image_hessian_matrix)
+            eigvalues = np.linalg.eigvalsh(a=image_hessian_matrix)
 
-            eigvalues, eigvecs = self.sort_eigenvalues_by_mod(eigvalues, eigvecs)
+            eigvalues = _sortbyabs(eigvalues, axis=-1)
 
             # Transpose to re-use a lot of skimage code (inclduing sorting by value + frangi resp calculation)
-
             # Frangi code from from skimage: filter/ridges.py line 472
             # We need the frangi response to select the right scale for each voxel position while constructing
             # the metric tensor
@@ -228,16 +241,21 @@ class VesselTrackHFM(object):
                                    (1 - np.exp(-r_g / gamma_sq)))
 
             eigenvals_at_all_scales[idx] = eigvalues
-            eigenvecs_at_all_scales[idx] = eigvecs
+            hessian_at_all_scales[idx] = image_hessian_matrix
             lambdas_array[idx] = np.max(lambdas, axis=0)  # Store the max value of orthogonal eigenvalues
 
         filtered_array[lambdas_array > 0] = 0
         arg_max_over_scales = np.argmax(filtered_array, axis=0)
+
         vesselness_multiscale = np.empty_like(arg_max_over_scales, dtype=np.float32)
+
         eigenvals_multiscale = np.empty(shape=(image.shape[0], image.shape[1], image.shape[2], 3), dtype=np.float32)
-        eigenvecs_multiscale = np.empty(shape=(image.shape[0], image.shape[1], image.shape[2], 3, 3), dtype=np.float32)
+
+        hessian_multiscale = np.empty(shape=(image.shape[0], image.shape[1], image.shape[2], 3, 3),
+                                      dtype=np.float32)
 
         # TODO: Fix this!!!! Indexing works weird for > 3 dimensions
+        # Choose the "best" scale for each voxel location based on response of vesselness filter
         for y in range(arg_max_over_scales.shape[0]):
             for x in range(arg_max_over_scales.shape[1]):
                 for z in range(arg_max_over_scales.shape[2]):
@@ -247,10 +265,44 @@ class VesselTrackHFM(object):
                     eigenvals_multiscale[y, x, z, :] = \
                         eigenvals_at_all_scales[arg_max_over_scales[y, x, z], y, x, z, :]
 
-                    eigenvecs_multiscale[y, x, z, :, :] = \
-                        eigenvecs_at_all_scales[arg_max_over_scales[y, x, z], y, x, z, :, :]
+                    hessian_multiscale[y, x, z, :, :] = \
+                        hessian_at_all_scales[arg_max_over_scales[y, x, z], y, x, z, :, :]
 
-        return eigenvals_multiscale, eigenvecs_multiscale, vesselness_multiscale
+        return hessian_multiscale, eigenvals_multiscale, vesselness_multiscale
+
+    @staticmethod
+    def calculate_metric_tensor_eigenvalues(eigenvalues):
+        """
+        Re-map eigenvalues of the image structure tensor (eg: Hessian) to create eigenvalues for the Riemannian
+        metric tensor.
+
+        Currently using the mapping shown in Equation 19 of Benmansour and Cohen (2011)
+        http://link.springer.com/10.1007/s11263-010-0331-0
+
+        :param eigenvalues: Eigenvalues of image structure tensor
+        :return: metric_eigenvalues: Eigenvalues used in the construction of the Riemannian metric tensor
+        """
+        # lambda0 < lambda1 < lambda2 -- According to Jean-Marie's implementation
+        # lambda2 is therefore the eigenvalue along the vessel direction
+        eps = 1e-4
+        lambda0, lambda1, lambda2 = eigenvalues
+
+        lambda0 = np.add(lambda0, eps)
+        lambda1 = np.add(lambda1, eps)
+        lambda2 = np.add(lambda2, eps)
+
+        # Calculate \alpha (anisotropy co-efficient) used in Eq (19) in Benmansour and Cohen (2011)
+        max_diff = np.amax(lambda2-lambda0)
+        anisotropy_coeff = (np.log(5)*4)/max_diff  # mu=5 in paper
+
+        print('Value of anisotropy co-efficient = {}'.format(anisotropy_coeff))
+
+        # Use mapping from Eq. (19) from Benmansour and Cohen (2011)
+        mu0 = np.exp(anisotropy_coeff*((lambda1 + lambda2)/2))
+        mu1 = np.exp(anisotropy_coeff*((lambda0 + lambda2)/2))
+        mu2 = np.exp(anisotropy_coeff*((lambda0 + lambda1)/2))
+
+        return mu0, mu1, mu2
 
     def create_riemannian_metric_tensor(self, image=None):
         """
@@ -266,10 +318,12 @@ class VesselTrackHFM(object):
 
         assert (image.ndim == 3)  # This method works only for 3D images
         assert (len(self.sigmas) == 3)
-        eigenvals, eigenvecs, vesselness = self._multiscale_hessian_eigenanalysis(image=image)
+        hessian_multiscale, eigenvals_multiscale, vesselness = self._multiscale_hessian_eigenanalysis(image=image)
 
-        # TODO: Define Riemannian metric tensor using eigenvalues and eigenvectors of the image hessian
-        return vesselness
+        M_tensor = Riemann.from_mapped_eigenvalues(matrix=hessian_multiscale,
+                                                   mapping=self.calculate_metric_tensor_eigenvalues).to_HFM()
+
+        return M_tensor
 
     @staticmethod
     def sort_eigenvalues_by_mod(eigenValues, eigenVectors):
@@ -332,18 +386,36 @@ class VesselTrackHFM(object):
             verbosity = 0
             showProgress = 0
 
-        params = {'model': 'Isotropic3',
-                  'arrayOrdering': 'YXZ_RowMajor',
-                  'order': 2,
-                  'dims': [image.shape[0], image.shape[1], image.shape[2]],
-                  # size of a pixel (only for physical dimensions)
-                  'gridScale': 1.,
-                  'speed': image,
-                  'seeds': np.array([z_seed_point, x_seed_point_swapped, y_seed_point_swapped]),
-                  'exportValues': self.get_distance_map,
-                  'exportGeodesicFlow': 1,
-                  'verbosity': verbosity,
-                  'showProgress': showProgress}
+        if self.model.lower() == 'isotropic':
+            speed_function = 1 + self.lmbda*np.power(image, self.p)
+            params = {'model': 'Isotropic3',
+                      'arrayOrdering': 'YXZ_RowMajor',
+                      'order': 2,
+                      'dims': [image.shape[0], image.shape[1], image.shape[2]],
+                      # size of a pixel (only for physical dimensions)
+                      'gridScale': 1.,
+                      'speed': speed_function,
+                      'seeds': np.array([z_seed_point, x_seed_point_swapped, y_seed_point_swapped]),
+                      'exportValues': self.get_distance_map,
+                      'exportGeodesicFlow': 1,
+                      'verbosity': verbosity,
+                      'showProgress': showProgress}
+        elif self.model.lower() == 'riemann':
+            metric_tensor = self.create_riemannian_metric_tensor(image=image)
+
+            params = {'model': 'Riemann3',
+                      'arrayOrdering': 'YXZ_RowMajor',
+                      'order': 2,
+                      'dims': [image.shape[0], image.shape[1], image.shape[2]],
+                      # size of a pixel (only for physical dimensions)
+                      'gridScale': 1.,
+                      'metric': metric_tensor,
+                      'seeds': np.array([z_seed_point, x_seed_point_swapped, y_seed_point_swapped]),
+                      'exportValues': 1,
+                      'verbosity': verbosity,
+                      'showProgress': showProgress}
+        else:
+            raise RuntimeError('{} is not a valid model'.format(self.model))
 
         self.output = HFMUtils.Run(params)
 
@@ -379,17 +451,22 @@ class VesselTrackHFM(object):
                                           option=3)
 
         # Pre-processing of the image to highlight vessels/tubular structures
-        vesselness_image, vesselMask = self.enhance_vessels(image=image)
+        hessian_multiscale, eigenvals_multiscale, vesselness_multiscale = self._multiscale_hessian_eigenanalysis(image)
+        vesselMask = self.create_vessel_mask(vesselness_multiscale)
 
-        # Solve the eikonal PDE to find shortest geodesics using the HFM method
-        self._solve_pde(image=vesselness_image, vesselMask=vesselMask)
+        if self.model.lower() == 'isotropic':
+            self._solve_pde(image=vesselness_multiscale, vesselMask=vesselMask)
+        elif self.model.lower() == 'riemann':
+            self._solve_pde(image=image, vesselMask=vesselMask)
+        else:
+            raise RuntimeError('{} is not a valid model'.format(self.model))
 
         if self.get_distance_map > 0:
             distance_map = self.output['values']
         else:
             distance_map = None
 
-        return vesselness_image, distance_map
+        return vesselness_multiscale, distance_map
 
 
 

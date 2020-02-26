@@ -27,7 +27,7 @@ subtraction_image = np.where(subtraction_image < 0, 0, subtraction_image)
 # Save the subtraction image
 subtraction_img = sitk.GetImageFromArray(arr=subtraction_image.transpose((2, 0, 1)))
 subtraction_img.CopyInformation(lesion_mask)
-sitk.WriteImage(subtraction_img, 'subtraction_image.nii')
+sitk.WriteImage(subtraction_img, 'subtraction_image_isotropic.nii')
 
 # Liver veins (portal and hepatic) have diameters in the range 2-26mm
 # In voxel size, this roughly corresponds to a range of 1-17 voxels
@@ -40,7 +40,8 @@ vessel_tracker = VesselTrackHFM(lmbda=LAMBDA,
                                 sigmas=(0.3, 3, 0.3),
                                 alpha=0.5,
                                 beta=0.5,
-                                gamma=15
+                                gamma=15,
+                                model='isotropic'
                                 )
 
 # Compute distance map and geodesic flow
@@ -54,5 +55,5 @@ vesselness_img.CopyInformation(lesion_mask)
 distance_map_img = sitk.GetImageFromArray(arr=distance_map.transpose((2, 0, 1)))
 distance_map_img.CopyInformation(lesion_mask)
 
-sitk.WriteImage(vesselness_img, 'vesselness.nii')
-sitk.WriteImage(distance_map_img, 'distancemap.nii')
+sitk.WriteImage(vesselness_img, 'vesselness_isotropic.nii')
+sitk.WriteImage(distance_map_img, 'distancemap_isotropic.nii')
