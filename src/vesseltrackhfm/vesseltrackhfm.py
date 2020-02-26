@@ -232,7 +232,7 @@ class VesselTrackHFM(object):
             r_b = _divide_nonzero(lambda1, filtered_raw) ** 2
 
             # Compute sensitivity to areas of high variance/texture/structure,
-            # see equation (12)in reference [1]_
+            # see equation (12)in reference [1]
             r_g = sum([lambda1 ** 2] + [lambdai ** 2 for lambdai in lambdas])
 
             # Compute output image for given (sigma) scale and store results in
@@ -304,23 +304,21 @@ class VesselTrackHFM(object):
 
         return mu0, mu1, mu2
 
-    def create_riemannian_metric_tensor(self, image=None):
+    def create_riemannian_metric_tensor(self, hessian=None):
         """
 
         Create metric tensor for a Reimannian manifold such that shortest paths (geodesics) between any 2 points
         lie along vessels
 
-        :param image: (numpy ndarray) 3D image
+        :param hessian: (numpy ndarray) image hessian tensor (..., 3, 3)
         :param scales: (tuple) List of sigmas to compute the Hessian over the appropriate range of scales
                               (start, end, step)
         :return: M: (numpy ndarray)
         """
 
-        assert (image.ndim == 3)  # This method works only for 3D images
+        assert (hessian.shape[-1] == 3 and hessian.shape[-2] == 3)
         assert (len(self.sigmas) == 3)
-        hessian_multiscale, eigenvals_multiscale, vesselness = self._multiscale_hessian_eigenanalysis(image=image)
-
-        M_tensor = Riemann.from_mapped_eigenvalues(matrix=hessian_multiscale,
+        M_tensor = Riemann.from_mapped_eigenvalues(matrix=hessian,
                                                    mapping=self.calculate_metric_tensor_eigenvalues).to_HFM()
 
         return M_tensor
@@ -400,8 +398,9 @@ class VesselTrackHFM(object):
                       'exportGeodesicFlow': 1,
                       'verbosity': verbosity,
                       'showProgress': showProgress}
-        elif self.model.lower() == 'riemann':
-            metric_tensor = self.create_riemannian_metric_tensor(image=image)
+
+        else:  # self.model = 'riemann'
+            metric_tensor = self.create_riemannian_metric_tensor(hessian=image)
 
             params = {'model': 'Riemann3',
                       'arrayOrdering': 'YXZ_RowMajor',
@@ -414,8 +413,6 @@ class VesselTrackHFM(object):
                       'exportValues': 1,
                       'verbosity': verbosity,
                       'showProgress': showProgress}
-        else:
-            raise RuntimeError('{} is not a valid model'.format(self.model))
 
         self.output = HFMUtils.Run(params)
 
@@ -436,19 +433,13 @@ class VesselTrackHFM(object):
         # Apply anisotropic diffusion filtering
         # Option 1 corresponds to exponential function of gradient magnitude as conduction co-eff as shown in
         # 'Scale-Space and Edge Detection Using Anisotropic Diffusion' Perona and Malik (1990)
-        # Option 3 corresponds to the conduction co-efficient given in 'Robust Anistropic Diffusion' by Black et al.
+        # Option 3 corresponds to the conduction co-efficient given in 'Robust Anistropic Diffusion' by
+        # Black et al. (1998)
         # This option seems to fix underflow occurring in certain images
-        try:
-            image = anisotropic_diffusion(img=image,
-                                          niter=10,
-                                          kappa=50,
-                                          option=3)
-        except FloatingPointError:  # Underflow because of large kappa
-            print('Underflow ocuured, choosing a smaller kappa')
-            image = anisotropic_diffusion(img=image,
-                                          niter=10,
-                                          kappa=25,
-                                          option=3)
+        image = anisotropic_diffusion(img=image,
+                                      niter=10,
+                                      kappa=25,
+                                      option=3)
 
         # Pre-processing of the image to highlight vessels/tubular structures
         hessian_multiscale, eigenvals_multiscale, vesselness_multiscale = self._multiscale_hessian_eigenanalysis(image)
@@ -457,7 +448,7 @@ class VesselTrackHFM(object):
         if self.model.lower() == 'isotropic':
             self._solve_pde(image=vesselness_multiscale, vesselMask=vesselMask)
         elif self.model.lower() == 'riemann':
-            self._solve_pde(image=image, vesselMask=vesselMask)
+            self._solve_pde(image=hessian_multiscale, vesselMask=vesselMask)
         else:
             raise RuntimeError('{} is not a valid model'.format(self.model))
 
