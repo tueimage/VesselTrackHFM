@@ -28,6 +28,7 @@ import scipy.ndimage.measurements
 from scipy.ndimage import label, center_of_mass
 from agd import HFMUtils
 from agd.Metrics import Riemann
+from agd.LinearParallel import outer
 from math import floor
 from skimage.filters.ridges import _divide_nonzero, _sortbyabs
 
@@ -304,11 +305,12 @@ class VesselTrackHFM(object):
 
         return mu0, mu1, mu2
 
-    def create_riemannian_metric_tensor(self, hessian=None):
+    def create_riemannian_metric_tensor(self, hessian=None, vesselness=None):
         """
 
         Create metric tensor for a Reimannian manifold such that shortest paths (geodesics) between any 2 points
-        lie along vessels
+        lie along vessels. The metric tensor has the same eigenvectors as the hessian while the eigenvalues (that
+        determine the speed of propagation along eigenvectors) is contructed using the vesselness function.
 
         :param hessian: (numpy ndarray) image hessian tensor (..., 3, 3)
         :param scales: (tuple) List of sigmas to compute the Hessian over the appropriate range of scales
@@ -318,10 +320,20 @@ class VesselTrackHFM(object):
 
         assert (hessian.shape[-1] == 3 and hessian.shape[-2] == 3)
         assert (len(self.sigmas) == 3)
-        M_tensor = Riemann.from_mapped_eigenvalues(matrix=hessian,
-                                                   mapping=self.calculate_metric_tensor_eigenvalues).to_HFM()
 
-        return M_tensor
+        eta = 0.25  # Aniostropy ratio
+
+        speed_function = 1 + self.lmbda*np.power(vesselness, self.p)
+
+        _, eVec_ = np.linalg.eigh(hessian)  # Not compatible with AD.
+        eVec = eVec_.transpose((-2, -1, 0, 1, 2))
+
+        #  speed[i] = 1/sqrt(mu[i]) -- eVec[2] is eigenvector is the eigenvector along the vessel
+        mu = np.array([1/(speed_function * eta**2), 1/(speed_function * eta**2), 1/speed_function])
+
+        M_tensor = outer(eVec, mu*eVec).sum(axis=2)
+
+        return Riemann(M_tensor).to_HFM()
 
     @staticmethod
     def sort_eigenvalues_by_mod(eigenValues, eigenVectors):
@@ -348,7 +360,7 @@ class VesselTrackHFM(object):
 
         return eigenValues, eigenVectors
 
-    def _solve_pde(self, image=None, vesselMask=None):
+    def _solve_pde(self, image=None, vesselness=None, vesselMask=None):
 
         # TODO: Improve and validate seed-point selection
         # <axis>_seed_point -- traveses through slices in a direction perpendicular to the axis to find seed-point
@@ -400,7 +412,9 @@ class VesselTrackHFM(object):
                       'showProgress': showProgress}
 
         else:  # self.model = 'riemann'
-            metric_tensor = self.create_riemannian_metric_tensor(hessian=image)
+            if vesselness is None:
+                raise RuntimeError('Riemannian metric tensor needs vesselness function to compute eigenvalues')
+            metric_tensor = self.create_riemannian_metric_tensor(hessian=image, vesselness=vesselness)
 
             params = {'model': 'Riemann3',
                       'arrayOrdering': 'YXZ_RowMajor',
@@ -448,7 +462,7 @@ class VesselTrackHFM(object):
         if self.model.lower() == 'isotropic':
             self._solve_pde(image=vesselness_multiscale, vesselMask=vesselMask)
         elif self.model.lower() == 'riemann':
-            self._solve_pde(image=hessian_multiscale, vesselMask=vesselMask)
+            self._solve_pde(image=hessian_multiscale, vesselness=vesselness_multiscale, vesselMask=vesselMask)
         else:
             raise RuntimeError('{} is not a valid model'.format(self.model))
 
