@@ -16,13 +16,9 @@ dce_img, _, lesion_mask = liver_image_obj.apply_liver_mask()
 
 
 dce_img_np = sitk.GetArrayFromImage(dce_img).transpose((2, 3, 1, 0))
-dce_post_contrast_arr = dce_img_np[:, :, :, 10]
-dce_pre_contrast_arr = dce_img_np[:, :, :, 0]
 
-
-# Create subtraction image between post- and pre-contrast phases that highlight the vessels
-subtraction_image = np.subtract(dce_post_contrast_arr, dce_pre_contrast_arr)
-subtraction_image = np.where(subtraction_image < 0, 0, subtraction_image)
+# Feedback from Frank W. : Phase 6 is the post arterial phase with best portal vein visibility
+subtraction_image = dce_img_np[:, :, :, 6]
 
 # Save the subtraction image
 subtraction_img = sitk.GetImageFromArray(arr=subtraction_image.transpose((2, 0, 1)))
@@ -31,14 +27,14 @@ sitk.WriteImage(subtraction_img, 'subtraction_image_riemann.nii')
 
 vessel_tracker = VesselTrackHFM(lmbda=LAMBDA,
                                 p=p,
-                                sigmas=(0.3, 3, 0.3),
+                                sigmas=(0.3, 2, 0.3),
                                 alpha=0.5,
                                 beta=0.5,
                                 gamma=15,
                                 model='riemann'
                                 )
 
-vesselness, distance_map = vessel_tracker(image=subtraction_image)
+vesselness, distance_map, _ = vessel_tracker(image=subtraction_image)
 
 
 # Save the outputs using the un-modified code

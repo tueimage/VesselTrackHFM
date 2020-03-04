@@ -45,7 +45,7 @@ vessel_tracker = VesselTrackHFM(lmbda=LAMBDA,
                                 )
 
 # Compute distance map and geodesic flow
-vesselness, distance_map = vessel_tracker(image=subtraction_image)
+vesselness, distance_map, _ = vessel_tracker(image=subtraction_image)
 
 
 # Save the outputs

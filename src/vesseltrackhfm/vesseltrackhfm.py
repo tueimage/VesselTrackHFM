@@ -389,6 +389,7 @@ class VesselTrackHFM(object):
         print('Seed-point perpendicular to the Y-axis = {}, {}, {}'.format(y_seed_point_swapped[1], y_seed_point_swapped[0],
                                                                            y_seed_point_swapped[2]))
 
+        seed_pts = np.array([z_seed_point, x_seed_point_swapped, y_seed_point_swapped])
         if self.verbose is True:
             verbosity = 2
             showProgress = 1
@@ -405,7 +406,7 @@ class VesselTrackHFM(object):
                       # size of a pixel (only for physical dimensions)
                       'gridScale': 1.,
                       'speed': speed_function,
-                      'seeds': np.array([z_seed_point, x_seed_point_swapped, y_seed_point_swapped]),
+                      'seeds': seed_pts,
                       'exportValues': self.get_distance_map,
                       'exportGeodesicFlow': 1,
                       'verbosity': verbosity,
@@ -423,12 +424,13 @@ class VesselTrackHFM(object):
                       # size of a pixel (only for physical dimensions)
                       'gridScale': 1.,
                       'metric': metric_tensor,
-                      'seeds': np.array([z_seed_point, x_seed_point_swapped, y_seed_point_swapped]),
+                      'seeds': seed_pts,
                       'exportValues': 1,
                       'verbosity': verbosity,
                       'showProgress': showProgress}
 
         self.output = HFMUtils.Run(params)
+        return seed_pts
 
     def __call__(self, image=None):
         """
@@ -460,9 +462,9 @@ class VesselTrackHFM(object):
         vesselMask = self.create_vessel_mask(vesselness_multiscale)
 
         if self.model.lower() == 'isotropic':
-            self._solve_pde(image=vesselness_multiscale, vesselMask=vesselMask)
+            seeds = self._solve_pde(image=vesselness_multiscale, vesselMask=vesselMask)
         elif self.model.lower() == 'riemann':
-            self._solve_pde(image=hessian_multiscale, vesselness=vesselness_multiscale, vesselMask=vesselMask)
+            seeds = self._solve_pde(image=hessian_multiscale, vesselness=vesselness_multiscale, vesselMask=vesselMask)
         else:
             raise RuntimeError('{} is not a valid model'.format(self.model))
 
@@ -471,7 +473,7 @@ class VesselTrackHFM(object):
         else:
             distance_map = None
 
-        return vesselness_multiscale, distance_map
+        return vesselness_multiscale, distance_map, seeds
 
 
 
