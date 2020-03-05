@@ -44,7 +44,8 @@ class VesselTrackHFM(object):
                  lmbda=100,
                  p=1.5,
                  verbose=True,
-                 model='isotropic'):
+                 model='isotropic',
+                 seed_point=None):
         """
         Class that defines HFM solver based vessel tracking algorithm
 
@@ -56,6 +57,8 @@ class VesselTrackHFM(object):
         :param lmbda: (int) Parameter for the speed function used by the solver to sharpen filtered image
         :param p: (float) Parameter for the speed function used by the solver to sharpen filtered image
         :param verbose: (bool) Flag, set true for prints
+        :param model: (str) Model on which the eikonal equation is formed ('isotropic' or 'riemann')
+        :param seed_point: (list) Single seed-point to run the FM solver. Provided in (X, Y, Z) [ITK] order
         """
 
         if get_distance_map is True:
@@ -71,6 +74,7 @@ class VesselTrackHFM(object):
         self.beta = beta
         self.gamma = gamma
         self.model = model
+        self.seed_point = seed_point
 
     def enhance_vessels(self, image=None):
         assert (isinstance(image, np.ndarray))
@@ -367,29 +371,35 @@ class VesselTrackHFM(object):
 
         eff_vesselMask = vesselMask[:, :, :-10]
 
-        z_seed_point = self._find_seed_point(vesselMask=eff_vesselMask,
-                                             binarize=False)
+        if self.seed_point is None:
+            z_seed_point = self._find_seed_point(vesselMask=eff_vesselMask,
+                                                 binarize=False)
 
-        print('Seed-point perpendicular to Z-axis = {}. {}, {}'.format(z_seed_point[1], z_seed_point[0], z_seed_point[2]))
-        # Exchange X and Z axes of vessel mask
-        x_seed_point = self._find_seed_point(vesselMask=eff_vesselMask.transpose((0, 2, 1)),
-                                             binarize=False)
-        # Swap it back to the right order
-        x_seed_point_swapped = np.array([x_seed_point[0], x_seed_point[2], x_seed_point[1]])
+            print('Seed-point perpendicular to Z-axis = {}. {}, {}'.format(z_seed_point[1], z_seed_point[0], z_seed_point[2]))
+            # Exchange X and Z axes of vessel mask
+            x_seed_point = self._find_seed_point(vesselMask=eff_vesselMask.transpose((0, 2, 1)),
+                                                 binarize=False)
+            # Swap it back to the right order
+            x_seed_point_swapped = np.array([x_seed_point[0], x_seed_point[2], x_seed_point[1]])
 
-        print('Seed-point perpendicular to X-axis = {}, {}, {}'.format(x_seed_point_swapped[1], x_seed_point_swapped[0],
-                                                                       x_seed_point_swapped[2]))
+            print('Seed-point perpendicular to X-axis = {}, {}, {}'.format(x_seed_point_swapped[1], x_seed_point_swapped[0],
+                                                                           x_seed_point_swapped[2]))
 
-        # Exchange Y and Z axes of vessel mask
-        y_seed_point = self._find_seed_point(vesselMask=eff_vesselMask.transpose((2, 1, 0)),
-                                             binarize=False)
-        # Swap it back to the right order
-        y_seed_point_swapped = np.array([y_seed_point[2], y_seed_point[1], y_seed_point[0]])
+            # Exchange Y and Z axes of vessel mask
+            y_seed_point = self._find_seed_point(vesselMask=eff_vesselMask.transpose((2, 1, 0)),
+                                                 binarize=False)
+            # Swap it back to the right order
+            y_seed_point_swapped = np.array([y_seed_point[2], y_seed_point[1], y_seed_point[0]])
 
-        print('Seed-point perpendicular to the Y-axis = {}, {}, {}'.format(y_seed_point_swapped[1], y_seed_point_swapped[0],
-                                                                           y_seed_point_swapped[2]))
+            print('Seed-point perpendicular to the Y-axis = {}, {}, {}'.format(y_seed_point_swapped[1], y_seed_point_swapped[0],
+                                                                               y_seed_point_swapped[2]))
 
-        seed_pts = np.array([z_seed_point, x_seed_point_swapped, y_seed_point_swapped])
+            seed_pts = np.array([z_seed_point, x_seed_point_swapped, y_seed_point_swapped])
+        else:
+            print('User-defined seed-point at {}, {}, {}'.format(self.seed_point[1], self.seed_point[0],
+                                                                 self.seed_point[2]))
+            seed_pts = np.array([[self.seed_point[1], self.seed_point[0], self.seed_point[2]]])
+
         if self.verbose is True:
             verbosity = 2
             showProgress = 1
